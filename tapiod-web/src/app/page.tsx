@@ -79,6 +79,7 @@ const Connector = ({ active, delay = 0 }: { active: boolean, delay?: number }) =
 export default function LiveTraces() {
   const [tracing, setTracing] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
+  const tracingRef = React.useRef(false);
   const [previousTotal, setPreviousTotal] = useState(0);
   const [recentLogs, setRecentLogs] = useState<any[]>([]);
   const [metrics, setMetrics] = useState({
@@ -111,6 +112,25 @@ export default function LiveTraces() {
 
           setPreviousTotal(prev => {
             if (data.total_requests > prev) {
+              if (!tracingRef.current) {
+                tracingRef.current = true;
+                setTracing(true);
+                setCurrentStep(0);
+                
+                let step = 1;
+                const progressionInterval = setInterval(() => {
+                  setCurrentStep(step);
+                  if (step >= 6) {
+                    clearInterval(progressionInterval);
+                    setTimeout(() => {
+                      setTracing(false);
+                      setCurrentStep(0);
+                      tracingRef.current = false;
+                    }, 4000);
+                  }
+                  step++;
+                }, 800);
+              }
               return data.total_requests;
             }
             return prev;
@@ -125,28 +145,6 @@ export default function LiveTraces() {
     const interval = setInterval(fetchMetrics, 1000);
     return () => clearInterval(interval);
   }, []);
-
-  useEffect(() => {
-    if (previousTotal > 0 && !tracing) {
-      setTracing(true);
-      setCurrentStep(0);
-
-      let step = 1;
-      const progressionInterval = setInterval(() => {
-        setCurrentStep(step);
-        if (step >= 6) {
-          clearInterval(progressionInterval);
-          setTimeout(() => {
-            setTracing(false);
-            setCurrentStep(0);
-          }, 5000);
-        }
-        step++;
-      }, 1000);
-
-      return () => clearInterval(progressionInterval);
-    }
-  }, [previousTotal, tracing]);
 
   return (
     <div className="flex flex-col h-full">
@@ -225,8 +223,8 @@ export default function LiveTraces() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
-        <div className="glass-panel p-6 flex flex-col min-h-[320px]">
+      <div className="grid grid-cols-2 gap-6 items-start">
+        <div className="glass-panel p-6 flex flex-col h-[400px]">
           <h3 className="text-[1.125rem] font-semibold tracking-tight mb-4 flex items-center gap-2">
             Request Log
             <span className="text-xs text-[var(--text-muted)] font-normal ml-2">Recent real requests</span>
@@ -249,7 +247,7 @@ export default function LiveTraces() {
 
         <div className="glass-panel p-8 flex flex-col">
           <h3 className="text-[1.125rem] font-semibold tracking-tight mb-8 text-[var(--text-primary)]/90">Pipeline Metrics</h3>
-          <div className="grid grid-cols-2 gap-6 flex-1">
+          <div className="grid grid-cols-2 gap-6">
             <div className="bg-black-20 p-6 rounded-xl border border-white/5 flex flex-col justify-center transition-all duration-300 hover:bg-black-30">
               <div className="text-[var(--text-muted)] text-[11px] uppercase tracking-widest mb-3 font-medium opacity-80">Cache Hit Rate</div>
               <div className="text-[2.25rem] font-bold text-gradient leading-none">{metrics.cacheHitRate}</div>

@@ -30,6 +30,7 @@ const StatCard = ({ title, value, sub, icon: Icon, colorClass }: StatCardProps) 
 );
 
 export default function Observability() {
+  const [timeRange, setTimeRange] = useState('24h');
   const [latencyData, setLatencyData] = useState<any[]>([]);
   const [routingData, setRoutingData] = useState<any[]>([]);
   const [stats, setStats] = useState({
@@ -43,8 +44,8 @@ export default function Observability() {
     const fetchData = async () => {
       try {
         const [obsRes, metRes] = await Promise.all([
-          fetch('http://localhost:4001/api/observability'),
-          fetch('http://localhost:4001/api/metrics')
+          fetch(`http://localhost:4001/api/observability?time_range=${timeRange}`),
+          fetch(`http://localhost:4001/api/metrics?time_range=${timeRange}`)
         ]);
         if (obsRes.ok && metRes.ok) {
           const obs = await obsRes.json();
@@ -68,7 +69,7 @@ export default function Observability() {
     fetchData();
     const interval = setInterval(fetchData, 3000);
     return () => clearInterval(interval);
-  }, []);
+  }, [timeRange]);
 
   return (
     <div className="flex flex-col h-full w-full relative">
@@ -77,10 +78,14 @@ export default function Observability() {
           <h1 className="text-[2.25rem] font-bold tracking-tight mb-2">Observability Dashboard</h1>
           <p className="text-[var(--text-muted)]">Analytics, cost tracking, and gateway health.</p>
         </div>
-        <select className="bg-[#1e1e20] border border-white/10 text-[var(--text-primary)] text-sm rounded-lg py-2 px-4 focus:outline-none focus:border-[var(--accent-purple)] transition-colors">
-          <option>Last 24 Hours</option>
-          <option>Last 7 Days</option>
-          <option>Last 30 Days</option>
+        <select 
+          value={timeRange} 
+          onChange={(e) => setTimeRange(e.target.value)}
+          className="bg-[#1e1e20] border border-white/10 text-[var(--text-primary)] text-sm rounded-lg py-2 px-4 focus:outline-none focus:border-[var(--accent-purple)] transition-colors"
+        >
+          <option value="24h">Last 24 Hours</option>
+          <option value="7d">Last 7 Days</option>
+          <option value="30d">Last 30 Days</option>
         </select>
       </div>
 

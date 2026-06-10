@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -8,7 +8,22 @@ import { Activity, Settings, BarChart2, Terminal, PanelLeftClose, PanelLeftOpen 
 
 const Sidebar = () => {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isBackendOnline, setIsBackendOnline] = useState(false);
   const pathname = usePathname();
+
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const res = await fetch('http://localhost:4001/api/config');
+        setIsBackendOnline(res.ok);
+      } catch (err) {
+        setIsBackendOnline(false);
+      }
+    };
+    checkStatus();
+    const interval = setInterval(checkStatus, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const navItems = [
     { name: 'Live Traces', path: '/', icon: Activity },
@@ -117,10 +132,17 @@ const Sidebar = () => {
             >
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-medium uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>Status</span>
-                <span className="badge badge-success flex items-center gap-1">
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', display: 'inline-block' }} />
-                  Online
-                </span>
+                {isBackendOnline ? (
+                  <span className="badge badge-success flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-current inline-block animate-pulse-slow" />
+                    Online
+                  </span>
+                ) : (
+                  <span className="badge bg-red-500/10 text-red-500 border border-red-500/20 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-current inline-block" />
+                    Offline
+                  </span>
+                )}
               </div>
               <div className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
                 LiteLLM Proxy: <span style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>v1.42.0</span>

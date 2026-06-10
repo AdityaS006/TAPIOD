@@ -1,4 +1,9 @@
 litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: localhost
+    port: 6379
   callbacks:
   - hooks.proxy_hooks
 model_list:
