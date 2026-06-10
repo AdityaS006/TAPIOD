@@ -1,0 +1,10 @@
+litellm[proxy]
+fastapi
+uvicorn[standard]
+redis[hiredis]
+presidio-analyzer
+presidio-anonymizer
+spacy
+psycopg2-binary
+python-dotenv
+httpx

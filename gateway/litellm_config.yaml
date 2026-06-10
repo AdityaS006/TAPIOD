@@ -1,0 +1,14 @@
+litellm_settings:
+  callbacks:
+  - hooks.proxy_hooks
+model_list:
+- litellm_params:
+    api_key: os.environ/GROQ_API_KEY
+    model: groq/llama-3.1-8b-instant
+  model_name: fast-model
+- litellm_params:
+    api_key: os.environ/GROQ_API_KEY
+    model: groq/llama-3.3-70b-versatile
+  model_name: heavy-model
+router_settings:
+  routing_strategy: simple-shuffle
