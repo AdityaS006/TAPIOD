@@ -1,9 +1,5 @@
 litellm_settings:
-  cache: true
-  cache_params:
-    type: redis
-    host: localhost
-    port: 6379
+  cache: false
   callbacks:
   - hooks.proxy_hooks
 model_list:
@@ -15,5 +11,9 @@ model_list:
     api_key: os.environ/GROQ_API_KEY
     model: groq/llama-3.3-70b-versatile
   model_name: heavy-model
+- litellm_params:
+    api_key: os.environ/GROQ_API_KEY
+    model: groq/llama-3.1-8b-instant
+  model_name: auto
 router_settings:
   routing_strategy: simple-shuffle

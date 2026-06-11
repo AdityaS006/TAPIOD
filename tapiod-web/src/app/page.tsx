@@ -201,7 +201,7 @@ export default function LiveTraces() {
                   title="4. Semantic Cache" 
                   icon={Database}
                   active={currentStep > 3}
-                  detail="Cache miss. Semantic similarity below threshold." 
+                  detail={latestReq && (Number(latestReq.tokens) === 0 || latestReq.model === 'cached') ? "Cache hit! Serving instantly." : "Cache miss. Semantic similarity below threshold."} 
                 />
                 <div className="mt-16"><Connector active={currentStep > 3} delay={3.5} /></div>
                 <TraceNode 
