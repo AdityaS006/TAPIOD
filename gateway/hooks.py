@@ -1277,4 +1277,19 @@ def remove_tier_model(alias: str):
     return config
 
 
+class TierReorderRequest(BaseModel):
+    tier: str
+    order: list[str]
+
+
+@app.put("/api/config/tiers/reorder")
+async def reorder_tier(req: TierReorderRequest):
+    if req.tier not in ("fast", "heavy"):
+        return {"error": "tier must be 'fast' or 'heavy'"}
+    config = load_routing_config()
+    config.setdefault("tiers", {})[req.tier] = req.order
+    save_routing_config(config)
+    return {"tiers": config["tiers"]}
+
+
 proxy_hooks = GatewayHooks()

@@ -73,14 +73,21 @@ def pick_provider(available: list[str], complexity_score: float) -> str:
     threshold = config.get("complexity_threshold", 0.5)
     tier = "heavy" if complexity_score >= threshold else "fast"
 
-    candidates = sorted(
-        [p for p in available if p.startswith(tier)],
-        key=lambda p: PROVIDER_COST_RANK.get(p, 999),
-    )
-    if not candidates:
-        candidates = sorted(available, key=lambda p: PROVIDER_COST_RANK.get(p, 999))
+    priority_list = config.get("tiers", {}).get(tier, [])
+    # Use priority order from config, filtered to only what's available
+    ordered_candidates = [p for p in priority_list if p in available]
 
-    return candidates[0] if candidates else "heavy-groq"
+    if not ordered_candidates:
+        # Fall back to cost-rank ordering when no priority entries are available
+        ordered_candidates = sorted(
+            [p for p in available if p.startswith(tier)],
+            key=lambda p: PROVIDER_COST_RANK.get(p, 999),
+        )
+
+    if not ordered_candidates:
+        ordered_candidates = sorted(available, key=lambda p: PROVIDER_COST_RANK.get(p, 999))
+
+    return ordered_candidates[0] if ordered_candidates else "heavy-groq"
 
 
 def get_costliest_available_model(available: list[str]) -> str:

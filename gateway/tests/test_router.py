@@ -34,7 +34,11 @@ def test_pick_provider_selects_cheapest_fast():
     provider = pick_provider(available, complexity_score=0.2)
     assert provider == "fast-groq"
 
-def test_pick_provider_selects_cheapest_heavy():
+def test_pick_provider_selects_cheapest_heavy(monkeypatch):
+    """With no priority list for heavy tier, falls back to cost-rank (groq is cheapest heavy)."""
+    def mock_config():
+        return {"complexity_threshold": 0.5, "tiers": {"fast": [], "heavy": []}}
+    monkeypatch.setattr("router.load_routing_config", mock_config)
     available = ["fast-groq", "heavy-groq", "heavy-openai"]
     provider = pick_provider(available, complexity_score=0.8)
     assert provider == "heavy-groq"
@@ -58,3 +62,29 @@ def test_provider_cost_rank_has_anthropic():
     assert "fast-anthropic" in PROVIDER_COST_RANK
     assert "heavy-anthropic" in PROVIDER_COST_RANK
     assert PROVIDER_COST_RANK["heavy-anthropic"] > PROVIDER_COST_RANK["fast-anthropic"]
+
+
+def test_pick_provider_respects_priority_order(monkeypatch):
+    """Priority list [heavy-openai, heavy-groq] → picks heavy-openai even though groq is cheaper."""
+    def mock_config():
+        return {
+            "complexity_threshold": 0.5,
+            "tiers": {"fast": ["fast-groq"], "heavy": ["heavy-openai", "heavy-groq"]},
+        }
+    monkeypatch.setattr("router.load_routing_config", mock_config)
+    available = ["fast-groq", "heavy-groq", "heavy-openai"]
+    provider = pick_provider(available, complexity_score=0.8)
+    assert provider == "heavy-openai"
+
+
+def test_pick_provider_skips_unavailable_priority_entries(monkeypatch):
+    """Priority list [heavy-anthropic, heavy-openai, heavy-groq] — anthropic unavailable → picks openai."""
+    def mock_config():
+        return {
+            "complexity_threshold": 0.5,
+            "tiers": {"fast": ["fast-groq"], "heavy": ["heavy-anthropic", "heavy-openai", "heavy-groq"]},
+        }
+    monkeypatch.setattr("router.load_routing_config", mock_config)
+    available = ["fast-groq", "heavy-groq", "heavy-openai"]  # no heavy-anthropic
+    provider = pick_provider(available, complexity_score=0.8)
+    assert provider == "heavy-openai"
