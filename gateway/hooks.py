@@ -1,89 +1,153 @@
 import time
 import threading
 import asyncio
-import httpx
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-from litellm.integrations.custom_logger import CustomLogger
-from dotenv import load_dotenv
-from typing import Dict, Any, List
-import asyncpg
-import sys
-import datetime
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
-from fastembed import TextEmbedding
+import hashlib
 import json
-from tool_executor import execute_tool
-from pydantic import BaseModel
 import os
+import uuid
 import yaml
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
 
-DB_DSN = "postgresql://litellm:litellm_password@localhost:5432/litellm_logs"
+import asyncpg
+import httpx
+import redis as redis_lib
+from fastapi import FastAPI, Query
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastembed import TextEmbedding
+from litellm.integrations.custom_logger import CustomLogger
+from pydantic import BaseModel
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 
-# Global Real-time service statuses
-services_status = {
-    "routellm_ready": False
+try:
+    from headroom import compress as headroom_compress
+    HEADROOM_AVAILABLE = True
+except Exception:
+    HEADROOM_AVAILABLE = False
+
+# Map internal model aliases to names headroom knows for token counting
+_HEADROOM_MODEL_MAP = {
+    "fast-groq": "gpt-4o-mini",
+    "heavy-groq": "gpt-4o",
+    "fast-openai": "gpt-4o-mini",
+    "heavy-openai": "gpt-4o",
+    "heavy-anthropic": "claude-opus-4-20250514",
 }
 
-last_injected_tools_by_tenant = {}
+from context import RequestContext
+from cache import redis_get, redis_set, qdrant_cache_get, qdrant_cache_set
+from memory import memory_retrieve, build_memory_system_block, memory_extract_and_store
+from router import knn_classify, pick_provider, get_available_providers, compute_routing_save, load_routing_config, save_routing_config, get_costliest_available_model
+from cost import estimate_cache_save, estimate_memory_tokens_saved, seconds_to_ms
+from tool_executor import execute_tool
 
-routellm_client = None
+DB_DSN = "postgresql://litellm:litellm_password@localhost:5432/litellm_logs"
+LAST_TOOLS_PATH = Path(__file__).parent / "last_tools.json"
 
-from qdrant_client import QdrantClient
-from litellm import embedding
+qdrant: Optional[QdrantClient] = None
+embedding_model: Optional[TextEmbedding] = None
+redis_client: Optional[redis_lib.Redis] = None
+services_status = {"qdrant_ready": False, "redis_ready": False}
 
-# Qdrant Semantic Cache Initialization (Moved to Phase 4)
-qdrant = None
-embedding_model = None
+# Store RequestContext objects keyed by request ID to avoid JSON serialization issues
+_ctx_store: dict[str, RequestContext] = {}
+
+def _store_ctx(req_id: str, ctx: RequestContext):
+    _ctx_store[req_id] = ctx
+
+def _pop_ctx(req_id: str) -> Optional[RequestContext]:
+    return _ctx_store.pop(req_id, None)
 
 def init_qdrant():
-    global qdrant
-    global embedding_model
+    global qdrant, embedding_model
     try:
-        print("Initializing Qdrant Semantic Cache (FastEmbed)...")
+        print("Initializing Qdrant + FastEmbed...")
         qdrant = QdrantClient(url="http://localhost:6333")
-        print("Downloading/Loading FastEmbed model...")
         embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
-        try:
-            qdrant.get_collection("semantic_cache_384")
-        except:
-            qdrant.create_collection("semantic_cache_384", vectors_config={"size": 384, "distance": "Cosine"})
-        print("Qdrant Semantic Cache Initialized Successfully!")
 
-        try:
-            qdrant.get_collection("tool_registry")
-            print("Tool registry collection already exists.")
-        except:
-            print("Creating tool registry and embedding 100 mock tools...")
-            qdrant.create_collection("tool_registry", vectors_config={"size": 384, "distance": "Cosine"})
-            from tools_registry import MOCK_TOOLS
-            import uuid
-            
-            tool_descriptions = [t["function"]["description"] for t in MOCK_TOOLS]
-            embeddings_gen = embedding_model.embed(tool_descriptions)
-            vecs = [vec.tolist() for vec in embeddings_gen]
-            
-            points = []
-            for i, tool in enumerate(MOCK_TOOLS):
-                points.append({
-                    "id": str(uuid.uuid4()),
-                    "vector": vecs[i],
-                    "payload": {
-                        "tool_data": json.dumps(tool)
-                    }
-                })
-            
-            qdrant.upsert(
-                collection_name="tool_registry",
-                points=points
-            )
-            print("100 mock tools successfully embedded and inserted into Qdrant!")
+        for collection, size in [
+            ("semantic_cache_384", 384),
+            ("tool_registry", 384),
+            ("user_memory", 384),
+            ("routing_examples", 384),
+        ]:
+            try:
+                qdrant.get_collection(collection)
+                print(f"Collection '{collection}' exists.")
+            except Exception:
+                qdrant.create_collection(
+                    collection,
+                    vectors_config=VectorParams(size=size, distance=Distance.COSINE),
+                )
+                print(f"Created collection '{collection}'.")
+
+        # Seed routing_examples if empty
+        if qdrant.count("routing_examples").count == 0:
+            print("[Init] routing_examples is empty — seeding 50 labeled examples...")
+            from seed_routing import FAST_EXAMPLES, HEAVY_EXAMPLES
+            import uuid as _uuid2
+            all_examples = [(p, "fast") for p in FAST_EXAMPLES] + [(p, "heavy") for p in HEAVY_EXAMPLES]
+            prompts = [e[0] for e in all_examples]
+            labels = [e[1] for e in all_examples]
+            vecs = [v.tolist() for v in embedding_model.embed(prompts)]
+            from qdrant_client.models import PointStruct as _PS
+            points = [
+                _PS(id=str(_uuid2.uuid4()), vector=vecs[i], payload={"label": labels[i], "prompt": prompts[i]})
+                for i in range(len(prompts))
+            ]
+            qdrant.upsert(collection_name="routing_examples", points=points)
+            print(f"[Init] routing_examples seeded with {len(points)} examples ({len(FAST_EXAMPLES)} fast, {len(HEAVY_EXAMPLES)} heavy).")
+        else:
+            print(f"[Init] routing_examples already has {qdrant.count('routing_examples').count} points.")
+
+        # Seed tool_registry if empty
+        from tools_registry import MOCK_TOOLS
+        tool_count = qdrant.count("tool_registry").count
+        if tool_count == 0:
+            print("Seeding tool_registry...")
+            import uuid as _uuid
+            descs = [t["function"]["description"] for t in MOCK_TOOLS]
+            vecs = [v.tolist() for v in embedding_model.embed(descs)]
+            points = [
+                PointStruct(id=str(_uuid.uuid4()), vector=vecs[i],
+                            payload={"tool_data": json.dumps(MOCK_TOOLS[i])})
+                for i in range(len(MOCK_TOOLS))
+            ]
+            qdrant.upsert(collection_name="tool_registry", points=points)
+            print(f"Tool registry seeded with {len(MOCK_TOOLS)} tools.")
+
+        services_status["qdrant_ready"] = True
+        print("Qdrant initialized successfully.")
     except Exception as e:
-        print(f"Qdrant/FastEmbed Initialization Error: {e}")
+        print(f"Qdrant init error: {e}")
+
+def init_redis():
+    global redis_client
+    try:
+        redis_client = redis_lib.Redis(host="localhost", port=6379, decode_responses=True)
+        redis_client.ping()
+        services_status["redis_ready"] = True
+        print("Redis connected successfully.")
+    except Exception as e:
+        print(f"Redis connection failed: {e}")
 
 threading.Thread(target=init_qdrant, daemon=True).start()
+threading.Thread(target=init_redis, daemon=True).start()
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+async def startup_event():
+    await init_db()
 
 async def init_db():
     try:
@@ -92,12 +156,23 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS requests_log (
                 id SERIAL PRIMARY KEY,
                 timestamp TIMESTAMP NOT NULL,
+                tenant_id VARCHAR(255),
+                user_id VARCHAR(255),
                 latency FLOAT NOT NULL,
                 model VARCHAR(255) NOT NULL,
-                cost FLOAT NOT NULL,
-                tokens INT NOT NULL,
+                provider VARCHAR(50),
+                prompt_tokens INT DEFAULT 0,
+                completion_tokens INT DEFAULT 0,
+                cost FLOAT DEFAULT 0.0,
+                actual_cost_usd FLOAT DEFAULT 0.0,
                 cache_hit BOOLEAN DEFAULT FALSE,
-                blocked BOOLEAN DEFAULT FALSE
+                cache_source VARCHAR(20),
+                cache_saved_usd FLOAT DEFAULT 0.0,
+                routing_saved_usd FLOAT DEFAULT 0.0,
+                memory_tokens_saved INT DEFAULT 0,
+                total_saved_usd FLOAT DEFAULT 0.0,
+                blocked BOOLEAN DEFAULT FALSE,
+                pipeline_trace JSONB
             );
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id VARCHAR(255) PRIMARY KEY,
@@ -113,89 +188,129 @@ async def init_db():
     except Exception as e:
         print(f"Failed to connect to PostgreSQL: {e}")
 
-def init_routellm():
-    global routellm_client
-    try:
-        from routellm.controller import Controller
-        print("Initializing RouteLLM Controller in background...")
-        routellm_client = Controller(
-            routers=["mf"],
-            strong_model="heavy-model",
-            weak_model="fast-model"
-        )
-        print("RouteLLM Controller initialized and loaded into memory!")
-        services_status["routellm_ready"] = True
-    except Exception as e:
-        print(f"Failed to initialize RouteLLM: {e}")
+def _error_response(message: str) -> dict:
+    return {"choices": [{"message": {"role": "assistant", "content": message}, "finish_reason": "stop", "index": 0}],
+            "model": "error", "usage": {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}}
 
-threading.Thread(target=init_routellm, daemon=True).start()
+async def _run_agent_loop(payload: dict, trace_id: str) -> dict:
+    """Run the full agent loop (tool detection + execution) and return the final response dict."""
+    enriched = dict(payload)
+    enriched.setdefault("metadata", {})["_tapiod_trace_id"] = trace_id
+    # Always non-streaming internally so we can inspect tool_calls
+    enriched.pop("stream", None)
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.on_event("startup")
-async def startup_event():
-    await init_db()
-
-@app.post("/api/agent/chat/completions")
-async def agent_chat_completions(payload: dict):
-    # This is the Multi-Turn Tool Execution Loop!
     async with httpx.AsyncClient() as client:
-        # Step 1: Forward the original payload to LiteLLM (Port 4000)
-        # LiteLLM handles the semantic cache, dynamic tool injection, and hitting Groq.
-        res1 = await client.post("http://localhost:4000/v1/chat/completions", json=payload, timeout=60.0)
+        res1 = await client.post("http://localhost:4000/v1/chat/completions", json=enriched, timeout=60.0)
         if res1.status_code != 200:
-            return res1.json()
-            
+            print(f"[AgentLoop] LiteLLM returned {res1.status_code}: {res1.text[:300]}")
+            try:
+                err = res1.json()
+                msg = err.get("error", {}).get("message", "") or err.get("detail", "") or f"Gateway error {res1.status_code}"
+            except Exception:
+                msg = f"Gateway error {res1.status_code}"
+            return _error_response(f"[Gateway error: {msg}]")
+
         data1 = res1.json()
         message = data1.get("choices", [{}])[0].get("message", {})
-        
-        # Step 2: Check if LLM requested a Tool Call
+
         if "tool_calls" in message and message["tool_calls"]:
-            # Print to logs so we can see the loop in action
             print(f"[AgentLoop] Intercepted Tool Calls from LLM: {message['tool_calls']}")
-            
-            # Step 3: Execute the tools!
             messages = payload.get("messages", [])
-            messages.append(message) # Append the assistant's tool call request
-            
+            messages.append(message)
+
             for tool_call in message["tool_calls"]:
                 tool_result = execute_tool(tool_call)
-                # Step 4: Append the real-world result as a "tool" role message
                 messages.append({
                     "tool_call_id": tool_call.get("id", "call_xyz"),
                     "role": "tool",
                     "name": tool_call.get("function", {}).get("name", ""),
                     "content": tool_result
                 })
-            
-            # Step 5: Second call to LiteLLM with the live data!
-            new_payload = payload.copy()
+
+            new_payload = dict(payload)
             new_payload["messages"] = messages
+            new_payload.setdefault("metadata", {})["_tapiod_trace_id"] = trace_id
+            new_payload.pop("stream", None)
             print(f"[AgentLoop] Sending Follow-Up Request to LLM with actual tool data...")
             res2 = await client.post("http://localhost:4000/v1/chat/completions", json=new_payload, timeout=60.0)
-            return res2.json()
-            
-        # If no tool calls, just return the final text
-        return data1
+            if res2.status_code != 200:
+                print(f"[AgentLoop] Follow-up returned {res2.status_code}: {res2.text[:300]}")
+                try:
+                    err = res2.json()
+                    msg = err.get("error", {}).get("message", "") or f"Tool follow-up error {res2.status_code}"
+                except Exception:
+                    msg = f"Tool follow-up error {res2.status_code}"
+                return _error_response(f"[Tool error: {msg}]")
+            data1 = res2.json()
+
+    # Fetch pipeline trace from Redis side-channel
+    if redis_client and services_status["redis_ready"]:
+        for _ in range(10):
+            raw = redis_client.get(f"tapiod:trace:{trace_id}")
+            if raw:
+                try:
+                    data1["_tapiod_trace"] = json.loads(raw)
+                except Exception:
+                    pass
+                redis_client.delete(f"tapiod:trace:{trace_id}")
+                break
+            await asyncio.sleep(0.05)
+
+    return data1
+
+
+@app.post("/api/agent/chat/completions")
+async def agent_chat_completions(payload: dict):
+    trace_id = str(uuid.uuid4())
+    want_stream = bool(payload.get("stream", False))
+
+    try:
+        data = await _run_agent_loop(payload, trace_id)
+    except httpx.TimeoutException:
+        data = _error_response("[Gateway timeout — the LLM took too long to respond]")
+    except httpx.ConnectError:
+        data = _error_response("[Cannot reach LiteLLM proxy — is it running on port 4000?]")
+    except Exception as e:
+        print(f"[AgentLoop] Unexpected error: {e}")
+        data = _error_response(f"[Internal error: {type(e).__name__}]")
+
+    if not want_stream:
+        return data
+
+    # Stream the final content as SSE so CLI clients get token-by-token output
+    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    trace = data.get("_tapiod_trace")
+
+    async def _sse():
+        # Yield content word-by-word so the terminal feels live
+        words = content.split(" ")
+        for i, word in enumerate(words):
+            token = word if i == 0 else " " + word
+            chunk = {
+                "choices": [{"delta": {"content": token}, "finish_reason": None, "index": 0}]
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+            await asyncio.sleep(0)  # yield control to event loop
+
+        yield "data: [DONE]\n\n"
+
+        if trace:
+            yield f"data: [TRACE]{json.dumps(trace)}\n\n"
+
+    return StreamingResponse(_sse(), media_type="text/event-stream")
 
 @app.get("/api/chats")
 async def get_chats(user_id: str, tenant_id: str):
     try:
         conn = await asyncpg.connect(DB_DSN)
         rows = await conn.fetch('''
-            SELECT id, title, updated_at, messages 
-            FROM chat_sessions 
-            WHERE user_id = $1 AND tenant_id = $2 
+            SELECT id, title, updated_at, messages
+            FROM chat_sessions
+            WHERE user_id = $1 AND tenant_id = $2
             ORDER BY updated_at DESC
         ''', user_id, tenant_id)
         await conn.close()
-        
+
         sessions = []
         for r in rows:
             sessions.append({
@@ -219,7 +334,7 @@ async def save_chat(session: dict):
                 title = EXCLUDED.title,
                 updated_at = EXCLUDED.updated_at,
                 messages = EXCLUDED.messages
-        ''', session["id"], session["tenant_id"], session["user_id"], session["title"], 
+        ''', session["id"], session["tenant_id"], session["user_id"], session["title"],
              session["updatedAt"] / 1000.0, json.dumps(session["messages"]))
         await conn.close()
         return {"status": "success"}
@@ -231,7 +346,7 @@ async def delete_chat(session_id: str, user_id: str, tenant_id: str):
     try:
         conn = await asyncpg.connect(DB_DSN)
         await conn.execute('''
-            DELETE FROM chat_sessions 
+            DELETE FROM chat_sessions
             WHERE id = $1 AND user_id = $2 AND tenant_id = $3
         ''', session_id, user_id, tenant_id)
         await conn.close()
@@ -242,7 +357,7 @@ async def delete_chat(session_id: str, user_id: str, tenant_id: str):
 @app.get("/api/last_tools")
 async def get_last_tools(tenant_id: str = "default_tenant"):
     try:
-        with open(r"c:\Coding\TAPIOD\gateway\last_tools.json", "r") as f:
+        with open(LAST_TOOLS_PATH, "r") as f:
             data = json.load(f)
             tools = data.get(tenant_id)
             if tools is None:
@@ -255,11 +370,11 @@ async def get_last_tools(tenant_id: str = "default_tenant"):
 async def get_metrics(time_range: str = "24h"):
     try:
         conn = await asyncpg.connect(DB_DSN)
-        
+
         interval = "1 day"
         if time_range == "7d": interval = "7 days"
         elif time_range == "30d": interval = "30 days"
-        
+
         stats = await conn.fetchrow(f'''
             SELECT COUNT(*) as total_requests,
                    COUNT(*) FILTER (WHERE cache_hit = TRUE) as cache_hits,
@@ -269,22 +384,22 @@ async def get_metrics(time_range: str = "24h"):
             FROM requests_log
             WHERE timestamp >= NOW() - INTERVAL '{interval}'
         ''')
-        
+
         recent = await conn.fetch('''
             SELECT timestamp, latency, model, cost, tokens
             FROM requests_log
             ORDER BY timestamp DESC
             LIMIT 20
         ''')
-        
+
         await conn.close()
-        
+
         total = stats['total_requests'] or 0
         cache_hits = stats['cache_hits'] or 0
         blocked = stats['blocked_requests'] or 0
         cost = stats['total_cost'] or 0.0
         avg_latency = stats['avg_latency'] or 0.0
-        
+
         recent_requests = [
             {
                 "time": r['timestamp'].strftime("%H:%M:%S"),
@@ -294,7 +409,7 @@ async def get_metrics(time_range: str = "24h"):
                 "tokens": r['tokens']
             } for r in reversed(recent)
         ]
-            
+
         return {
             "total_requests": total,
             "cache_hits": cache_hits,
@@ -310,11 +425,11 @@ async def get_metrics(time_range: str = "24h"):
 async def get_observability(time_range: str = "24h"):
     try:
         conn = await asyncpg.connect(DB_DSN)
-        
+
         interval = "1 day"
         if time_range == "7d": interval = "7 days"
         elif time_range == "30d": interval = "30 days"
-        
+
         rows = await conn.fetch(f'''
             SELECT date_trunc('minute', timestamp) as minute,
                    model,
@@ -325,7 +440,7 @@ async def get_observability(time_range: str = "24h"):
             GROUP BY 1, 2
             ORDER BY 1 ASC
         ''')
-        
+
         routing_stats = await conn.fetch(f'''
             SELECT model, COUNT(*) as c
             FROM requests_log
@@ -334,27 +449,27 @@ async def get_observability(time_range: str = "24h"):
               AND blocked = FALSE
             GROUP BY model
         ''')
-        
+
         cache_stats = await conn.fetchrow(f'''
             SELECT COUNT(*) FILTER (WHERE cache_hit = TRUE) as hits,
                    COUNT(*) FILTER (WHERE blocked = TRUE) as blocks
             FROM requests_log
             WHERE timestamp >= NOW() - INTERVAL '{interval}'
         ''')
-        
+
         await conn.close()
-        
+
         grouped = {}
         now = datetime.now()
         for i in range(5, -1, -1):
             t = (now - timedelta(minutes=i)).strftime("%H:%M")
             grouped[t] = {"time": t, "fast": 0, "heavy": 0, "fast_count": 0, "heavy_count": 0}
-            
+
         for r in rows:
             t = r['minute'].strftime("%H:%M")
             if t not in grouped:
                 grouped[t] = {"time": t, "fast": 0, "heavy": 0, "fast_count": 0, "heavy_count": 0}
-                
+
             is_heavy = "heavy" in r['model'] or "70b" in r['model'] or "gpt-4o" in r['model']
             if is_heavy:
                 grouped[t]["heavy"] += r['avg_lat'] * 1000 * r['count']
@@ -362,7 +477,7 @@ async def get_observability(time_range: str = "24h"):
             else:
                 grouped[t]["fast"] += r['avg_lat'] * 1000 * r['count']
                 grouped[t]["fast_count"] += r['count']
-                
+
         latency_data = []
         for t, data in sorted(grouped.items()):
             f_avg = data["fast"] / data["fast_count"] if data["fast_count"] > 0 else 0
@@ -372,13 +487,13 @@ async def get_observability(time_range: str = "24h"):
                 "fast": round(f_avg),
                 "heavy": round(h_avg)
             })
-            
+
         routing_data = [{"name": r['model'], "value": r['c']} for r in routing_stats if r['c'] > 0]
         if cache_stats and cache_stats['hits'] > 0:
             routing_data.append({"name": "Cache Hit", "value": cache_stats['hits']})
         if cache_stats and cache_stats['blocks'] > 0:
             routing_data.append({"name": "Blocked", "value": cache_stats['blocks']})
-            
+
         return {
             "latencyData": latency_data,
             "routingData": routing_data
@@ -403,7 +518,7 @@ def get_config():
                 })
     except Exception as e:
         print("Error reading config:", e)
-        
+
     providers = []
     pid = 1
     try:
@@ -422,8 +537,8 @@ def get_config():
                         pid += 1
     except FileNotFoundError:
         pass
-            
-    return {"models": models, "providers": providers, "routellm_status": services_status["routellm_ready"]}
+
+    return {"models": models, "providers": providers, "routing_status": services_status.get("qdrant_ready", False)}
 
 class ProviderReq(BaseModel):
     name: str
@@ -433,13 +548,13 @@ class ProviderReq(BaseModel):
 def add_provider(req: ProviderReq):
     env_name = req.name.upper() + "_API_KEY"
     os.environ[env_name] = req.apiKey
-    
+
     try:
         with open(".env", "r") as f:
             lines = f.readlines()
     except FileNotFoundError:
         lines = []
-        
+
     found = False
     with open(".env", "w") as f:
         for line in lines:
@@ -450,14 +565,14 @@ def add_provider(req: ProviderReq):
                 f.write(line)
         if not found:
             f.write(f"\n{env_name}={req.apiKey}\n")
-            
+
     return {"status": "success"}
 
 @app.get("/api/config/verify/{name}")
 def verify_provider(name: str):
     env_name = name.upper() + "_API_KEY"
     key = os.environ.get(env_name)
-    
+
     if not key:
         try:
             with open(".env", "r") as f:
@@ -466,7 +581,7 @@ def verify_provider(name: str):
                         key = line.split("=")[1].strip()
         except FileNotFoundError:
             pass
-            
+
     if not key:
         return {"status": "error", "message": "Key not found"}
     if len(key) < 10:
@@ -478,7 +593,7 @@ def delete_provider(name: str):
     env_name = name.upper() + "_API_KEY"
     if env_name in os.environ:
         del os.environ[env_name]
-        
+
     try:
         with open(".env", "r") as f:
             lines = f.readlines()
@@ -488,7 +603,7 @@ def delete_provider(name: str):
                     f.write(line)
     except FileNotFoundError:
         pass
-        
+
     return {"status": "success"}
 
 class ModelReq(BaseModel):
@@ -502,12 +617,12 @@ def add_model(req: ModelReq):
     try:
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
-            
+
         if "model_list" not in config:
             config["model_list"] = []
-            
+
         api_key_env = f"os.environ/{req.provider.upper()}_API_KEY"
-        
+
         config["model_list"].append({
             "model_name": req.alias,
             "litellm_params": {
@@ -515,10 +630,10 @@ def add_model(req: ModelReq):
                 "api_key": api_key_env
             }
         })
-        
+
         with open(config_path, "w") as f:
             yaml.dump(config, f, default_flow_style=False)
-            
+
         return {"status": "success"}
     except Exception as e:
         print("Error saving model:", e)
@@ -530,13 +645,13 @@ def delete_model(alias: str):
     try:
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
-            
+
         if "model_list" in config:
             config["model_list"] = [m for m in config["model_list"] if m.get("model_name") != alias]
-            
+
             with open(config_path, "w") as f:
                 yaml.dump(config, f, default_flow_style=False)
-                
+
         return {"status": "success"}
     except Exception as e:
         print("Error deleting model:", e)
@@ -550,258 +665,556 @@ class GatewayHooks(CustomLogger):
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         messages = data.get("messages", [])
-        
-        # Ensure LLM knows it is an Autonomous Agent
+        if not messages:
+            return data
+
+        # --- Extract IDs ---
+        api_key = (getattr(user_api_key_dict, "api_key", None)
+                   or (user_api_key_dict.get("api_key", "") if isinstance(user_api_key_dict, dict) else ""))
+        tenant_id = hashlib.sha256(api_key.encode()).hexdigest() if api_key else "default_tenant"
+        user_id = data.pop("user_id", None) or data.get("user") or tenant_id
+        model = data.get("model", "heavy-groq")
+
+        # --- Inject system prompt ---
         system_msg = {
             "role": "system",
-            "content": "You are TAPIOD, an advanced Autonomous Agent. You have dynamic access to external tools and real-time APIs. You may use tools on some turns and not others depending on the user's prompt. If you previously provided real-time data or specific factual information, do not apologize or claim you hallucinated it; you successfully fetched it using a tool in a previous turn. Trust your previous messages."
+            "content": (
+                "You are TAPIOD, an advanced autonomous agent. You have dynamic access to "
+                "external tools and real-time APIs. Trust your previous messages — if you "
+                "fetched data via a tool in a prior turn, do not apologize for it."
+            ),
         }
-        
-        if messages and messages[0].get("role") != "system":
+        if messages[0].get("role") != "system":
             messages.insert(0, system_msg)
-        elif messages:
-            messages[0]["content"] = system_msg["content"] + "\n\n" + messages[0].get("content", "")
-            
-        data["messages"] = messages
-        
-        # Extract tenant ID from user API key for isolation
-        api_key = ""
-        if hasattr(user_api_key_dict, "api_key"):
-            api_key = getattr(user_api_key_dict, "api_key")
-        elif isinstance(user_api_key_dict, dict):
-            api_key = user_api_key_dict.get("api_key", "")
-            
-        import hashlib
-        tenant_id = hashlib.sha256(api_key.encode()).hexdigest() if api_key else "default_tenant"
-        data["tenant_id"] = tenant_id
-
-        # --- QDRANT SEMANTIC CACHE SIMULATION ---
-        bypass_cache = data.get("metadata", {}).get("bypass_cache", False)
-        
-        with open("hooks_debug.txt", "a") as f:
-            f.write(f"Pre-call hook triggered for tenant: {tenant_id}. bypass_cache: {bypass_cache}\n")
-            
-        if not bypass_cache and messages and qdrant is not None and embedding_model is not None:
-            prompt = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
-            try:
-                from qdrant_client.models import Filter, FieldCondition, MatchValue
-                
-                vecs = list(embedding_model.embed([prompt]))
-                if vecs:
-                    vec = vecs[0].tolist()
-                    response = qdrant.query_points(
-                        collection_name="semantic_cache_384",
-                        query=vec,
-                        query_filter=Filter(
-                            must=[
-                                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
-                            ]
-                        ),
-                        limit=1
-                    )
-                    results = response.points
-                    if results and results[0].score > 0.85:
-                        cached_response = results[0].payload.get("response")
-                        if cached_response:
-                            data["mock_response"] = cached_response
-                            data["qdrant_cache_hit"] = True
-                            
-                            # Pass flag safely to the logger hook via metadata
-                            if "litellm_params" not in data:
-                                data["litellm_params"] = {}
-                            if "metadata" not in data["litellm_params"]:
-                                data["litellm_params"]["metadata"] = {}
-                            data["litellm_params"]["metadata"]["qdrant_cache_hit"] = True
-                            
-                            print(f"Semantic Cache HIT for tenant {tenant_id[:8]}! Score: {results[0].score}")
-                            return data
-            except Exception as e:
-                with open("hooks_debug.txt", "a") as f:
-                    f.write(f"Semantic Cache Error: {e}\n")
-                print(f"Semantic Cache Error: {e}")
-                pass
-
-        if messages and services_status["routellm_ready"] and routellm_client:
-            prompt = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
-
-            try:
-                model_route = routellm_client.route(prompt, "mf", 0.5)
-                print(f"RouteLLM evaluated prompt and selected: {model_route}")
-                data["model"] = model_route
-            except Exception as e:
-                score = min(1.0, len(prompt) / 100.0)
-                if any(kw in prompt.lower() for kw in ["code", "script", "analyze", "explain"]):
-                    score += 0.5
-                model_route = "heavy-model" if score >= 0.5 else "fast-model"
-                print(f"RouteLLM (Local Fallback) selected {model_route} with complexity score {score}")
-                data["model"] = model_route
         else:
-            data["model"] = "heavy-model"
-            
-        # --- DYNAMIC TOOL LOADOUT ---
-        if messages and qdrant is not None and embedding_model is not None:
-            prompt = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
+            messages[0]["content"] = system_msg["content"] + "\n\n" + messages[0].get("content", "")
+
+        prompt = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
+
+        # --- Embed ONCE ---
+        if qdrant is None or embedding_model is None or not prompt:
+            data["messages"] = messages
+            data["tenant_id"] = tenant_id
+            return data
+
+        t0 = time.perf_counter()
+        vec = list(embedding_model.embed([prompt]))[0].tolist()
+        embed_ms = seconds_to_ms(time.perf_counter() - t0)
+
+        trace_id = (data.get("metadata") or {}).get("_tapiod_trace_id", "")
+        ctx = RequestContext(
+            prompt=prompt, messages=messages,
+            tenant_id=tenant_id, user_id=user_id, vec=vec,
+        )
+        ctx._trace_id = trace_id
+        ctx.record("embed", f"384-dim in {embed_ms:.1f}ms", embed_ms)
+
+        bypass_cache = data.get("metadata", {}).get("bypass_cache", False)
+
+        # --- L1: Redis exact cache ---
+        if not bypass_cache and services_status["redis_ready"] and redis_client:
+            t0 = time.perf_counter()
+            cached = redis_get(redis_client, tenant_id, model, messages)
+            redis_ms = seconds_to_ms(time.perf_counter() - t0)
+            if cached:
+                ctx.cache_hit = True
+                ctx.cache_source = "redis"
+                ctx.cache_saved_usd = estimate_cache_save(
+                    prompt,
+                    baseline_model=get_costliest_available_model(get_available_providers()),
+                )
+                ctx.record("redis_cache", "HIT", redis_ms)
+                req_id = str(uuid.uuid4())
+                _store_ctx(req_id, ctx)
+                data["mock_response"] = json.loads(cached)
+                data.setdefault("metadata", {})["_tapiod_req_id"] = req_id
+                data["tenant_id"] = tenant_id
+                return data
+            ctx.record("redis_cache", "miss", redis_ms)
+
+        # --- L2: Qdrant semantic cache ---
+        if not bypass_cache:
+            config = load_routing_config()
+            threshold = config.get("cache_similarity_threshold", 0.85)
+            t0 = time.perf_counter()
+            cached_text = qdrant_cache_get(qdrant, vec, tenant_id, threshold=threshold)
+            qdrant_ms = seconds_to_ms(time.perf_counter() - t0)
+            if cached_text:
+                ctx.cache_hit = True
+                ctx.cache_source = "qdrant"
+                ctx.cache_saved_usd = estimate_cache_save(
+                    prompt,
+                    baseline_model=get_costliest_available_model(get_available_providers()),
+                )
+                ctx.record("qdrant_cache", "HIT", qdrant_ms)
+                mock = {"choices": [{"message": {"role": "assistant", "content": cached_text}}],
+                        "model": "cached", "usage": {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}}
+                if services_status["redis_ready"] and redis_client:
+                    redis_set(redis_client, tenant_id, model, messages, json.dumps(mock))
+                req_id = str(uuid.uuid4())
+                _store_ctx(req_id, ctx)
+                data["mock_response"] = mock
+                data.setdefault("metadata", {})["_tapiod_req_id"] = req_id
+                data["tenant_id"] = tenant_id
+                return data
+            ctx.record("qdrant_cache", "miss", qdrant_ms)
+
+        # --- Memory recall ---
+        t0 = time.perf_counter()
+        facts = memory_retrieve(qdrant, vec, user_id, tenant_id)
+        mem_ms = seconds_to_ms(time.perf_counter() - t0)
+        if facts:
+            ctx.injected_memories = facts
+            ctx.memory_tokens_saved = estimate_memory_tokens_saved(facts)
+            block = build_memory_system_block(facts)
+            messages[0]["content"] += block
+            ctx.record("memory_recall", f"{len(facts)} facts recalled", mem_ms)
+        else:
+            ctx.record("memory_recall", "none", mem_ms)
+
+        # --- KNN routing ---
+        t0 = time.perf_counter()
+        complexity = knn_classify(qdrant, vec)
+        available = get_available_providers()
+        chosen = pick_provider(available, complexity)
+        route_ms = seconds_to_ms(time.perf_counter() - t0)
+        ctx.complexity_score = complexity
+        ctx.provider_model = chosen
+        ctx.routing_saved_usd = compute_routing_save(
+            chosen, available,
+            int(len(prompt.split()) * 1.3), 150
+        )
+        ctx.record("knn_router", f"{chosen} (score {complexity:.2f})", route_ms)
+        data["model"] = chosen
+
+        # --- Headroom compression ---
+        if HEADROOM_AVAILABLE:
+            t0 = time.perf_counter()
             try:
-                vecs = list(embedding_model.embed([prompt]))
-                if vecs:
-                    vec = vecs[0].tolist()
-                    response = qdrant.query_points(
-                        collection_name="tool_registry",
-                        query=vec,
-                        limit=3,
-                        score_threshold=0.65
-                    )
-                    tools_to_inject = []
-                    for res in response.points:
-                        tool_data = json.loads(res.payload["tool_data"])
-                        tools_to_inject.append(tool_data)
-                    
-                    if tools_to_inject:
-                        data["tools"] = tools_to_inject
-                        tool_names = [t["function"]["name"] for t in tools_to_inject]
-                        try:
-                            with open(r"c:\Coding\TAPIOD\gateway\last_tools.json", "w") as f:
-                                json.dump({tenant_id: tool_names}, f)
-                        except Exception as e:
-                            print(f"IPC FILE WRITE ERROR: {e}")
-                        print(f"Dynamic Tool Loadout injected {len(tools_to_inject)} tools for intent.")
-                    else:
-                        try:
-                            with open(r"c:\Coding\TAPIOD\gateway\last_tools.json", "w") as f:
-                                json.dump({tenant_id: []}, f)
-                        except Exception as e:
-                            print(f"IPC FILE WRITE ERROR: {e}")
+                hr_model = _HEADROOM_MODEL_MAP.get(chosen, "gpt-4o")
+                hr_result = headroom_compress(messages, model=hr_model)
+                messages = hr_result.messages
+                hr_ms = seconds_to_ms(time.perf_counter() - t0)
+                if hr_result.tokens_saved > 0:
+                    ctx.record("headroom", f"{hr_result.tokens_saved} tokens saved ({hr_result.compression_ratio:.0%})", hr_ms)
+                else:
+                    ctx.record("headroom", "no compression needed", hr_ms)
             except Exception as e:
-                print(f"Dynamic Tool Loadout Error: {e}")
-            
+                hr_ms = seconds_to_ms(time.perf_counter() - t0)
+                ctx.record("headroom", f"skipped ({type(e).__name__})", hr_ms)
+
+        # --- Tool selection ---
+        t0 = time.perf_counter()
+        try:
+            tool_resp = qdrant.query_points(
+                collection_name="tool_registry",
+                query=vec,
+                limit=3,
+                score_threshold=0.65,
+            )
+            tools_to_inject = [json.loads(r.payload["tool_data"]) for r in tool_resp.points]
+        except Exception:
+            tools_to_inject = []
+        tool_ms = seconds_to_ms(time.perf_counter() - t0)
+
+        if tools_to_inject:
+            ctx.injected_tools = tools_to_inject
+            data["tools"] = tools_to_inject
+            tool_names = [t["function"]["name"] for t in tools_to_inject]
+            try:
+                LAST_TOOLS_PATH.write_text(json.dumps({tenant_id: tool_names}))
+            except Exception:
+                pass
+            ctx.record("tool_select", ", ".join(tool_names), tool_ms)
+        else:
+            ctx.record("tool_select", "none", tool_ms)
+
+        req_id = str(uuid.uuid4())
+        _store_ctx(req_id, ctx)
+        data["messages"] = messages
+        data["tenant_id"] = tenant_id
+        data.setdefault("metadata", {})["_tapiod_req_id"] = req_id
         return data
 
     async def async_post_call_success_hook(self, data, user_api_key_dict, response):
-        with open("hooks_debug.txt", "a") as f:
-            f.write(f"Post-call hook triggered. qdrant_cache_hit={data.get('qdrant_cache_hit')}\n")
-            
-        # --- CACHE WRITE TO QDRANT ---
-        if qdrant is not None and not data.get("qdrant_cache_hit"):
-            try:
-                messages = data.get("messages", [])
-                prompt = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
-                
-                # Check if it's a litellm mock response (which is a dict) or a real ModelResponse
-                if isinstance(response, dict):
-                    response_text = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-                else:
-                    response_text = response.choices[0].message.content if hasattr(response, "choices") else ""
-                    
-                tenant_id = data.get("tenant_id", "default_tenant")
-                
-                with open("hooks_debug.txt", "a") as f:
-                    f.write(f"Post-hook vars: prompt_len={len(prompt)}, response_len={len(response_text)}, tenant={tenant_id[:8]}\n")
-                
-                if prompt and response_text and embedding_model is not None:
-                    vecs = list(embedding_model.embed([prompt]))
-                    if vecs:
-                        vec = vecs[0].tolist()
-                        import uuid
-                        qdrant.upsert(
-                            collection_name="semantic_cache_384",
-                            points=[{
-                                "id": str(uuid.uuid4()),
-                                "vector": vec,
-                                "payload": {
-                                    "tenant_id": tenant_id,
-                                    "prompt": prompt, 
-                                    "response": response_text
-                                }
-                            }]
-                        )
-                        with open("hooks_debug.txt", "a") as f:
-                            f.write(f"Semantic Cache WRITTEN to Qdrant!\n")
-                        print(f"Semantic Cache WRITTEN for tenant {tenant_id[:8]}!")
-            except Exception as e:
-                with open("hooks_debug.txt", "a") as f:
-                    f.write(f"Cache Write Error: {e}\n")
-                print(f"Cache Write Error: {e}")
-                pass
-                
-        # Zero out virtual tokens in the response sent to the client if it's a cache hit
-        if data.get("qdrant_cache_hit"):
+        req_id = data.get("metadata", {}).get("_tapiod_req_id")
+        ctx: Optional[RequestContext] = _ctx_store.get(req_id) if req_id else None
+        if ctx is None:
+            return response
+
+        if isinstance(response, dict):
+            response_text = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+        else:
+            response_text = (response.choices[0].message.content
+                             if hasattr(response, "choices") else "")
+
+        if ctx.cache_hit:
+            if isinstance(response, dict):
+                response.setdefault("usage", {})
+                response["usage"].update({"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0})
+                response["model"] = "cached"
             if hasattr(response, "usage") and response.usage:
                 response.usage.total_tokens = 0
                 response.usage.prompt_tokens = 0
                 response.usage.completion_tokens = 0
-            elif isinstance(response, dict) and "usage" in response:
-                response["usage"]["total_tokens"] = 0
-                response["usage"]["prompt_tokens"] = 0
-                response["usage"]["completion_tokens"] = 0
-                
-            if hasattr(response, "model"):
-                response.model = "cached"
-            elif isinstance(response, dict):
-                response["model"] = "cached"
-            
+
+        ctx.compute_total_saved()
+
+        trace_dict = ctx.to_trace_dict()
+        if isinstance(response, dict):
+            response["_tapiod_trace"] = trace_dict
+
+        # Write trace to Redis side-channel for the agent endpoint (cross-process)
+        trace_redis_id = (data.get("metadata") or {}).get("_tapiod_trace_id", "")
+        if trace_redis_id and redis_client and services_status["redis_ready"]:
+            try:
+                redis_client.setex(f"tapiod:trace:{trace_redis_id}", 10, json.dumps(trace_dict))
+            except Exception:
+                pass
+
+        async def _write_cache():
+            if not ctx.cache_hit and response_text:
+                qdrant_cache_set(qdrant, ctx.vec, ctx.tenant_id, ctx.prompt, response_text)
+                if services_status["redis_ready"] and redis_client:
+                    mock = {"choices": [{"message": {"role": "assistant", "content": response_text}}],
+                            "model": "cached", "usage": {"total_tokens": 0}}
+                    redis_set(redis_client, ctx.tenant_id, ctx.provider_model,
+                              ctx.messages, json.dumps(mock))
+
+        async def _write_memory():
+            if not ctx.cache_hit and response_text:
+                async def call_llm(messages, model="fast-groq"):
+                    async with httpx.AsyncClient() as client:
+                        r = await client.post(
+                            "http://localhost:4000/v1/chat/completions",
+                            json={"model": model, "messages": messages, "max_tokens": 100},
+                            timeout=10.0,
+                        )
+                        return r.json()["choices"][0]["message"]["content"]
+                await memory_extract_and_store(
+                    qdrant, embedding_model, ctx.user_id, ctx.tenant_id,
+                    ctx.prompt, response_text, call_llm,
+                )
+
+        asyncio.create_task(_write_cache())
+        asyncio.create_task(_write_memory())
         return response
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        latency = (end_time - start_time).total_seconds() if hasattr(end_time, 'total_seconds') else (end_time - start_time)
-        if hasattr(start_time, 'timestamp'):
-            latency = end_time.timestamp() - start_time.timestamp()
-            
-        usage = getattr(response_obj, "usage", None)
-        total_tokens = getattr(usage, "total_tokens", 0) if usage else 0
+        latency = (end_time.timestamp() - start_time.timestamp()
+                   if hasattr(start_time, "timestamp")
+                   else float(end_time - start_time))
+
+        actual_cost = kwargs.get("response_cost", 0.0) or 0.0
+        req_id = (kwargs.get("metadata") or {}).get("_tapiod_req_id")
+        ctx: Optional[RequestContext] = _pop_ctx(req_id) if req_id else None
+
+        usage = getattr(response_obj, "usage", None) or {}
         if isinstance(response_obj, dict):
             usage = response_obj.get("usage", {})
-            total_tokens = usage.get("total_tokens", 0)
-            
-        cost = (total_tokens / 1000.0) * 0.001
-        
-        model_name = getattr(kwargs, "model", "unknown")
-        if isinstance(kwargs, dict):
-            model_name = kwargs.get("model", "unknown")
-            
-        # Determine cache hit
-        cache_hit = False
-        if isinstance(response_obj, dict) and response_obj.get("model") == "cached":
-            cache_hit = True
-        elif hasattr(response_obj, "model") and getattr(response_obj, "model") == "cached":
-            cache_hit = True
-        elif kwargs.get("qdrant_cache_hit"):
-            cache_hit = True
-        elif kwargs.get("mock_response"):
-            cache_hit = True
-        elif kwargs.get("cache_hit"):
-            cache_hit = True
-        elif kwargs.get("litellm_params", {}).get("metadata", {}).get("qdrant_cache_hit"):
-            cache_hit = True
-        elif total_tokens == 0 and cost == 0.0:
-            cache_hit = True
-            
-        print(f"DEBUG_LOGGER: type(response_obj)={type(response_obj)}, model_attr={getattr(response_obj, 'model', 'NO_MODEL_ATTR')}, dict_model={response_obj.get('model') if isinstance(response_obj, dict) else 'NOT_DICT'}")
-        
+        prompt_tokens = getattr(usage, "prompt_tokens", None) or (usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0)
+        completion_tokens = getattr(usage, "completion_tokens", None) or (usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0)
+
+        cache_hit = bool(ctx and ctx.cache_hit)
+        cache_source = (ctx.cache_source if ctx else "") or ""
+        cache_saved = (ctx.cache_saved_usd if ctx else 0.0) or 0.0
+        routing_saved = (ctx.routing_saved_usd if ctx else 0.0) or 0.0
+        mem_tokens = (ctx.memory_tokens_saved if ctx else 0) or 0
+        provider_model = (ctx.provider_model if ctx else "") or kwargs.get("model", "unknown")
+        total_saved = cache_saved + routing_saved
+        pipeline_trace_list = ctx.pipeline_trace if ctx else []
+        pipeline_trace = json.dumps(pipeline_trace_list)
+
         if cache_hit:
-            cost = 0.0
-            total_tokens = 0
-            model_name = "cached"
-            
+            actual_cost = 0.0
+            prompt_tokens = 0
+            completion_tokens = 0
+
+        # Write pipeline trace to Redis side-channel for the agent endpoint to pick up
+        trace_redis_id = getattr(ctx, "_trace_id", "") if ctx else ""
+        if trace_redis_id and redis_client and services_status["redis_ready"]:
+            try:
+                ctx.actual_cost_usd = actual_cost
+                ctx.compute_total_saved()
+                trace_payload = ctx.to_trace_dict()
+                redis_client.setex(
+                    f"tapiod:trace:{trace_redis_id}",
+                    10,
+                    json.dumps(trace_payload),
+                )
+            except Exception:
+                pass
+
         try:
             conn = await asyncpg.connect(DB_DSN)
-            await conn.execute('''
-                INSERT INTO requests_log (timestamp, latency, model, cost, tokens, cache_hit, blocked)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ''', datetime.now(), latency, model_name, cost, total_tokens, cache_hit, False)
+            await conn.execute(
+                '''INSERT INTO requests_log
+                   (timestamp, tenant_id, user_id, latency, model, provider,
+                    prompt_tokens, completion_tokens, cost, actual_cost_usd,
+                    cache_hit, cache_source, cache_saved_usd, routing_saved_usd,
+                    memory_tokens_saved, total_saved_usd, blocked, pipeline_trace)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)''',
+                datetime.now(), ctx.tenant_id if ctx else "unknown",
+                ctx.user_id if ctx else "unknown",
+                latency, provider_model, provider_model.split("-")[1] if "-" in provider_model else "groq",
+                prompt_tokens, completion_tokens, actual_cost, actual_cost,
+                cache_hit, cache_source, cache_saved, routing_saved,
+                mem_tokens, total_saved, False, pipeline_trace,
+            )
             await conn.close()
-            print(f"Logged to PostgreSQL -> latency: {latency:.2f}s | model: {model_name} | cache: {cache_hit}")
         except Exception as e:
-            print(f"DB Insert Error: {e}")
+            print(f"DB log error: {e}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             conn = await asyncpg.connect(DB_DSN)
-            await conn.execute('''
-                INSERT INTO requests_log (timestamp, latency, model, cost, tokens, cache_hit, blocked)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ''', datetime.now(), 0.0, "blocked", 0.0, 0, False, True)
+            await conn.execute(
+                '''INSERT INTO requests_log
+                   (timestamp, tenant_id, user_id, latency, model, cost, actual_cost_usd, blocked)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)''',
+                datetime.now(), "unknown", "unknown", 0.0, "blocked", 0.0, 0.0, True,
+            )
             await conn.close()
-        except Exception as e:
-            print(f"DB Insert Error: {e}")
+        except Exception:
+            pass
+
+
+@app.get("/api/traces")
+async def get_traces(limit: int = 20, tenant_id: str = None):
+    try:
+        conn = await asyncpg.connect(DB_DSN)
+        if tenant_id:
+            rows = await conn.fetch(
+                '''SELECT id, timestamp, model, actual_cost_usd, total_saved_usd,
+                          cache_source, pipeline_trace, memory_tokens_saved
+                   FROM requests_log WHERE tenant_id = $1
+                   ORDER BY timestamp DESC LIMIT $2''',
+                tenant_id, limit
+            )
+        else:
+            rows = await conn.fetch(
+                '''SELECT id, timestamp, model, actual_cost_usd, total_saved_usd,
+                          cache_source, pipeline_trace, memory_tokens_saved
+                   FROM requests_log ORDER BY timestamp DESC LIMIT $1''',
+                limit
+            )
+        await conn.close()
+        traces = []
+        for r in rows:
+            pipeline = json.loads(r["pipeline_trace"]) if r["pipeline_trace"] else []
+            traces.append({
+                "id": r["id"],
+                "timestamp": r["timestamp"].strftime("%H:%M:%S"),
+                "model": r["model"],
+                "actual_cost_usd": r["actual_cost_usd"] or 0.0,
+                "total_saved_usd": r["total_saved_usd"] or 0.0,
+                "cache_source": r["cache_source"] or None,
+                "memory_tokens_saved": r["memory_tokens_saved"] or 0,
+                "pipeline": pipeline,
+            })
+        return {"traces": traces}
+    except Exception as e:
+        return {"traces": [], "error": str(e)}
+
+
+@app.get("/api/savings")
+async def get_savings(time_range: str = "24h"):
+    try:
+        conn = await asyncpg.connect(DB_DSN)
+        interval = {"24h": "1 day", "7d": "7 days", "30d": "30 days"}.get(time_range, "1 day")
+        row = await conn.fetchrow(f'''
+            SELECT
+                COALESCE(SUM(actual_cost_usd), 0) AS actual,
+                COALESCE(SUM(total_saved_usd), 0) AS saved,
+                COALESCE(SUM(cache_saved_usd), 0) AS cache_saved,
+                COALESCE(SUM(routing_saved_usd), 0) AS routing_saved,
+                COALESCE(SUM(memory_tokens_saved), 0) AS mem_tokens,
+                COUNT(*) FILTER (WHERE cache_source = 'redis') AS redis_hits,
+                COUNT(*) FILTER (WHERE cache_source = 'qdrant') AS qdrant_hits
+            FROM requests_log
+            WHERE timestamp >= NOW() - INTERVAL \'{interval}\'
+        ''')
+        await conn.close()
+        actual = float(row["actual"])
+        saved = float(row["saved"])
+        baseline = actual + saved
+        pct = round((saved / baseline * 100) if baseline > 0 else 0, 1)
+        return {
+            "actual_cost_usd": round(actual, 6),
+            "total_saved_usd": round(saved, 6),
+            "baseline_usd": round(baseline, 6),
+            "savings_pct": pct,
+            "cache_saved_usd": round(float(row["cache_saved"]), 6),
+            "routing_saved_usd": round(float(row["routing_saved"]), 6),
+            "memory_tokens_saved": int(row["mem_tokens"]),
+            "cache_hits_redis": int(row["redis_hits"]),
+            "cache_hits_qdrant": int(row["qdrant_hits"]),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/routing-stats")
+async def get_routing_stats(time_range: str = "24h"):
+    try:
+        conn = await asyncpg.connect(DB_DSN)
+        interval = {"24h": "1 day", "7d": "7 days", "30d": "30 days"}.get(time_range, "1 day")
+        rows = await conn.fetch(f'''
+            SELECT model, COUNT(*) as cnt, COALESCE(SUM(actual_cost_usd), 0) as cost
+            FROM requests_log
+            WHERE timestamp >= NOW() - INTERVAL \'{interval}\'
+              AND cache_hit = FALSE AND blocked = FALSE
+            GROUP BY model
+        ''')
+        total_row = await conn.fetchrow(f'''
+            SELECT COALESCE(SUM(actual_cost_usd), 0) AS actual,
+                   COALESCE(SUM(total_saved_usd), 0) AS saved
+            FROM requests_log
+            WHERE timestamp >= NOW() - INTERVAL \'{interval}\'
+        ''')
+        await conn.close()
+
+        total_requests = sum(r["cnt"] for r in rows)
+        distribution = [
+            {
+                "provider": r["model"],
+                "count": r["cnt"],
+                "pct": round(r["cnt"] / total_requests * 100) if total_requests > 0 else 0,
+                "cost": round(float(r["cost"]), 6),
+            }
+            for r in rows
+        ]
+        actual = float(total_row["actual"])
+        saved = float(total_row["saved"])
+        baseline = actual + saved
+
+        try:
+            examples_count = qdrant.count("routing_examples").count if qdrant else 0
+        except Exception:
+            examples_count = 0
+
+        return {
+            "distribution": distribution,
+            "baseline_usd": round(baseline, 6),
+            "actual_usd": round(actual, 6),
+            "arbitrage_saved_usd": round(saved, 6),
+            "routing_examples_count": examples_count,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/memory")
+async def list_memories(user_id: str, tenant_id: str):
+    if qdrant is None:
+        return {"memories": [], "error": "Qdrant not ready"}
+    try:
+        results = qdrant.scroll(
+            collection_name="user_memory",
+            scroll_filter=Filter(must=[
+                FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+            ]),
+            limit=100,
+            with_payload=True,
+            with_vectors=False,
+        )
+        memories = []
+        now = int(time.time())
+        for point in results[0]:
+            ts = point.payload.get("timestamp", 0)
+            age_s = now - ts
+            if age_s < 3600:
+                age_str = f"{age_s // 60}m ago"
+            elif age_s < 86400:
+                age_str = f"{age_s // 3600}h ago"
+            else:
+                age_str = f"{age_s // 86400}d ago"
+            memories.append({
+                "id": str(point.id),
+                "fact": point.payload.get("fact", ""),
+                "timestamp": ts,
+                "age": age_str,
+            })
+        memories.sort(key=lambda x: x["timestamp"], reverse=True)
+        return {"memories": memories}
+    except Exception as e:
+        return {"memories": [], "error": str(e)}
+
+
+@app.delete("/api/memory/{memory_id}")
+async def delete_memory(memory_id: str):
+    if qdrant is None:
+        return {"status": "error", "error": "Qdrant not ready"}
+    try:
+        qdrant.delete(collection_name="user_memory", points_selector=[memory_id])
+        return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@app.delete("/api/memory")
+async def wipe_memory(user_id: str, tenant_id: str):
+    if qdrant is None:
+        return {"status": "error", "error": "Qdrant not ready"}
+    try:
+        qdrant.delete(
+            collection_name="user_memory",
+            points_selector=Filter(must=[
+                FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+            ]),
+        )
+        return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@app.get("/api/config/tiers")
+def get_tiers():
+    return load_routing_config()
+
+
+@app.patch("/api/config/thresholds")
+def update_thresholds(body: dict):
+    config = load_routing_config()
+    if "complexity_threshold" in body:
+        config["complexity_threshold"] = float(body["complexity_threshold"])
+    if "cache_similarity_threshold" in body:
+        config["cache_similarity_threshold"] = float(body["cache_similarity_threshold"])
+    if "cache_ttl_seconds" in body:
+        config["cache_ttl_seconds"] = int(body["cache_ttl_seconds"])
+    save_routing_config(config)
+    return config
+
+
+class TierModelReq(BaseModel):
+    alias: str
+    actual: str
+    provider: str
+    cost_per_m: float
+    tier: str
+
+
+@app.post("/api/config/tiers")
+def add_tier_model(req: TierModelReq):
+    config = load_routing_config()
+    if req.tier not in config["tiers"]:
+        config["tiers"][req.tier] = []
+    if req.alias not in config["tiers"][req.tier]:
+        config["tiers"][req.tier].append(req.alias)
+    save_routing_config(config)
+    return config
+
+
+@app.delete("/api/config/tiers/{alias}")
+def remove_tier_model(alias: str):
+    config = load_routing_config()
+    for tier in config["tiers"].values():
+        if alias in tier:
+            tier.remove(alias)
+    save_routing_config(config)
+    return config
+
 
 proxy_hooks = GatewayHooks()
