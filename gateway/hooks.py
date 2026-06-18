@@ -182,6 +182,13 @@ async def init_db():
                 updated_at TIMESTAMP NOT NULL,
                 messages JSONB NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS provider_keys (
+                tenant_id   TEXT NOT NULL,
+                provider    TEXT NOT NULL,
+                enc_key     TEXT NOT NULL,
+                created_at  TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (tenant_id, provider)
+            );
         ''')
         await conn.close()
         print("PostgreSQL Database Initialized Successfully!")
@@ -656,6 +663,59 @@ def delete_model(alias: str):
     except Exception as e:
         print("Error deleting model:", e)
         return {"status": "error", "message": str(e)}
+
+PROVIDER_ENV_MAP = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai":    "OPENAI_API_KEY",
+    "groq":      "GROQ_API_KEY",
+    "gemini":    "GEMINI_API_KEY",
+}
+
+
+class ProviderKeyRequest(BaseModel):
+    provider: str
+    key: str
+
+
+@app.get("/api/config/keys")
+async def list_provider_keys():
+    return [
+        {"provider": p, "present": bool(os.getenv(env))}
+        for p, env in PROVIDER_ENV_MAP.items()
+    ]
+
+
+@app.post("/api/config/keys")
+async def save_provider_key(req: ProviderKeyRequest):
+    from crypto import encrypt_key
+    enc = encrypt_key(req.key)
+    conn = await asyncpg.connect(DB_DSN)
+    await conn.execute(
+        """INSERT INTO provider_keys (tenant_id, provider, enc_key)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (tenant_id, provider) DO UPDATE SET enc_key = $3, created_at = NOW()""",
+        "default_tenant", req.provider, enc,
+    )
+    await conn.close()
+    env_var = PROVIDER_ENV_MAP.get(req.provider)
+    if env_var:
+        os.environ[env_var] = req.key
+    return {"status": "ok"}
+
+
+@app.delete("/api/config/keys/{provider}")
+async def delete_provider_key(provider: str):
+    conn = await asyncpg.connect(DB_DSN)
+    await conn.execute(
+        "DELETE FROM provider_keys WHERE tenant_id = $1 AND provider = $2",
+        "default_tenant", provider,
+    )
+    await conn.close()
+    env_var = PROVIDER_ENV_MAP.get(provider)
+    if env_var and env_var in os.environ:
+        del os.environ[env_var]
+    return {"status": "ok"}
+
 
 # Uvicorn server is now launched independently via CLI.
 

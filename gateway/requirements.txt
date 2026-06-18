@@ -2,9 +2,16 @@ litellm[proxy]
 fastapi
 uvicorn[standard]
 redis[hiredis]
+asyncpg
+qdrant-client[fastembed]
+fastembed
 presidio-analyzer
 presidio-anonymizer
 spacy
 psycopg2-binary
 python-dotenv
 httpx
+pyyaml
+pytest
+pytest-asyncio
+cryptography
