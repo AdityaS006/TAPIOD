@@ -10,3 +10,4 @@ gateway/__pycache__/
 *.log
 *.jsonl
 hooks_debug.txt
+gateway/tests/results/
