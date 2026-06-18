@@ -1,303 +1,311 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { Key, Server, Plus, Save, Trash2, ShieldCheck, GitBranch } from 'lucide-react';
+import { useState, useEffect, useCallback } from "react";
+import { Reorder } from "framer-motion";
+import { Lock, GripVertical, CheckCircle, XCircle, Save, Trash2, ChevronRight } from "lucide-react";
 
-interface Provider {
-  id: string;
-  name: string;
-  apiKey: string;
-}
+const PROVIDERS = [
+  { id: "anthropic", name: "Anthropic",     hint: "sk-ant-api03-..." },
+  { id: "openai",    name: "OpenAI",         hint: "sk-proj-..." },
+  { id: "groq",      name: "Groq",           hint: "gsk_..." },
+  { id: "gemini",    name: "Google Gemini",  hint: "AIza..." },
+];
 
-interface ModelRoute {
-  id: string;
-  alias: string;
-  actual: string;
-  provider: string;
-  tier: string;
-}
+const COMING_SOON_TOGGLE = ({ label }: { label: string }) => (
+  <div className="flex items-center justify-between opacity-40 cursor-not-allowed">
+    <span className="text-sm text-[var(--text-secondary)]">{label}</span>
+    <div className="w-10 h-5 rounded-full bg-white/10 border border-white/10" />
+  </div>
+);
 
-export default function Configuration() {
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [models, setModels] = useState<ModelRoute[]>([]);
-  const [routellmStatus, setRoutellmStatus] = useState(false);
-  
-  // Form states for Provider
-  const [newProviderName, setNewProviderName] = useState('Groq');
-  const [newProviderKey, setNewProviderKey] = useState('');
-  
-  // Form states for Model Route
-  const [newRouteAlias, setNewRouteAlias] = useState('');
-  const [newRouteActual, setNewRouteActual] = useState('');
-  const [newRouteProvider, setNewRouteProvider] = useState('Groq');
+export default function Config() {
+  const [tiers, setTiers]             = useState<any>(null);
+  const [fastTier, setFastTier]       = useState<string[]>([]);
+  const [heavyTier, setHeavyTier]     = useState<string[]>([]);
+  const [keyStatuses, setKeyStatuses] = useState<{ provider: string; present: boolean }[]>([]);
+  const [keyInputs, setKeyInputs]     = useState<Record<string, string>>({});
+  const [saving, setSaving]           = useState<Record<string, boolean>>({});
 
-  const fetchConfig = async () => {
+  const fetchAll = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:4001/api/config');
-      if (res.ok) {
-        const data = await res.json();
-        setProviders(data.providers || []);
-        setModels(data.models || []);
-        setRoutellmStatus(data.routellm_status || false);
+      const [tiersRes, keysRes] = await Promise.all([
+        fetch("/api/config/tiers"),
+        fetch("/api/config/keys"),
+      ]);
+      if (tiersRes.ok) {
+        const t = await tiersRes.json();
+        setTiers(t);
+        setFastTier(t.tiers?.fast ?? []);
+        setHeavyTier(t.tiers?.heavy ?? []);
       }
-    } catch (err) {
-      // Backend might not be up yet, silently ignore for prototype
-    }
-  };
-
-  useEffect(() => {
-    fetchConfig();
-    const interval = setInterval(fetchConfig, 5000);
-    return () => clearInterval(interval);
+      if (keysRes.ok) setKeyStatuses(await keysRes.json());
+    } catch {}
   }, []);
 
-  const handleAddProvider = async () => {
-    if (!newProviderKey) return;
-    try {
-      await fetch('http://localhost:4001/api/config/provider', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newProviderName, apiKey: newProviderKey })
-      });
-      setNewProviderKey('');
-      fetchConfig();
-    } catch (err) {
-      // Backend might not be up yet, silently ignore for prototype
-    }
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  const saveKey = async (provider: string) => {
+    const key = keyInputs[provider];
+    if (!key) return;
+    setSaving(s => ({ ...s, [provider]: true }));
+    await fetch("/api/config/keys", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, key }),
+    });
+    setKeyInputs(k => ({ ...k, [provider]: "" }));
+    await fetchAll();
+    setSaving(s => ({ ...s, [provider]: false }));
   };
 
-  const handleAddRoute = async () => {
-    if (!newRouteAlias || !newRouteActual) return;
-    try {
-      await fetch('http://localhost:4001/api/config/model', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ alias: newRouteAlias, actual: newRouteActual, provider: newRouteProvider })
-      });
-      setNewRouteAlias('');
-      setNewRouteActual('');
-      fetchConfig();
-    } catch (err) {
-      // Backend might not be up yet, silently ignore for prototype
-    }
+  const deleteKey = async (provider: string) => {
+    await fetch(`/api/config/keys/${provider}`, { method: "DELETE" });
+    await fetchAll();
   };
 
-  const handleVerifyProvider = async (name: string) => {
-    try {
-      const res = await fetch(`http://localhost:4001/api/config/verify/${name}`);
-      const data = await res.json();
-      if (data.status === 'success') {
-        alert(`${name} API Key is valid and active!`);
-      } else {
-        alert(`Failed to verify ${name} API Key: ${data.message}`);
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Verification request failed.');
-    }
+  const handleReorder = async (tier: string, newOrder: string[]) => {
+    if (tier === "fast") setFastTier(newOrder);
+    else setHeavyTier(newOrder);
+    await fetch("/api/config/tiers/reorder", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tier, order: newOrder }),
+    });
   };
 
-  const handleRemoveProvider = async (name: string) => {
-    try {
-      await fetch(`http://localhost:4001/api/config/provider/${name}`, {
-        method: 'DELETE'
-      });
-      fetchConfig();
-    } catch (err) {
-      // Backend might not be up yet, silently ignore for prototype
-    }
+  const keyPresentFor = (alias: string): boolean => {
+    const provider = alias.split("-")[1]; // "fast-groq" → "groq", "heavy-anthropic" → "anthropic"
+    return keyStatuses.find(k => k.provider === provider)?.present ?? true;
   };
 
-  const handleRemoveRoute = async (alias: string) => {
-    try {
-      await fetch(`http://localhost:4001/api/config/model/${alias}`, {
-        method: 'DELETE'
-      });
-      fetchConfig();
-    } catch (err) {
-      // Backend might not be up yet, silently ignore for prototype
-    }
+  const updateThreshold = async (key: string, value: number) => {
+    await fetch("/api/config/thresholds", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [key]: value }),
+    });
+    await fetchAll();
+  };
+
+  const SliderRow = ({
+    label, configKey, min, max, step, unit,
+  }: {
+    label: string; configKey: string; min: number; max: number; step: number; unit: string;
+  }) => {
+    const val = tiers?.[configKey] ?? (configKey === "complexity_threshold" ? 0.5 : 0.85);
+    return (
+      <div className="flex items-center justify-between gap-6">
+        <span className="text-sm text-[var(--text-secondary)] w-56">{label}</span>
+        <div className="flex items-center gap-3 flex-1">
+          <input
+            type="range" min={min} max={max} step={step}
+            defaultValue={val}
+            className="flex-1 accent-[var(--accent-purple)]"
+            onMouseUp={e => updateThreshold(configKey, parseFloat((e.target as HTMLInputElement).value))}
+          />
+          <span className="text-sm text-[var(--text-muted)] w-16 text-right">{val}{unit}</span>
+        </div>
+      </div>
+    );
   };
 
   return (
-    <div className="flex flex-col h-full w-full relative">
-      <div className="mb-8">
-        <h1 className="text-[2.25rem] font-bold tracking-tight mb-2">Gateway Configuration</h1>
-        <p className="text-[var(--text-muted)]">Manage LLM providers, API keys, and routing rules securely.</p>
+    <div className="flex flex-col gap-8 pb-8">
+      <div>
+        <h1 className="text-[2.25rem] font-bold tracking-tight mb-2">Configuration</h1>
+        <p className="text-[var(--text-muted)]">
+          Manage API keys, model routing priority, cache settings, and guardrails.
+        </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-6 flex-1">
-        <div className="glass-panel p-8 flex flex-col">
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-white/5 rounded-lg border border-white/5">
-                <Key className="text-[var(--accent-orange)]" size={24} />
+      {/* API Keys */}
+      <div className="glass-panel p-6 flex flex-col gap-4">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-secondary)]">
+          API Keys
+        </h2>
+        {PROVIDERS.map(({ id, name, hint }) => {
+          const present = keyStatuses.find(k => k.provider === id)?.present ?? false;
+          return (
+            <div
+              key={id}
+              className="flex items-center gap-4 bg-white/5 rounded-lg p-3 border border-white/5"
+            >
+              <div className="flex items-center gap-2 w-40 shrink-0">
+                {present
+                  ? <CheckCircle size={14} className="text-[var(--accent-green)] shrink-0" />
+                  : <XCircle    size={14} className="text-[var(--text-muted)]   shrink-0" />
+                }
+                <span className="text-sm font-medium text-[var(--text-primary)]">{name}</span>
               </div>
-              <h2 className="text-[1.5rem] font-semibold tracking-tight">Provider API Keys</h2>
-            </div>
-            <button className="flex items-center gap-2 bg-[var(--accent-purple)] hover:bg-[var(--accent-purple-light)] text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors border border-white/10 shadow-md">
-              <Plus size={16} /> Add Provider
-            </button>
-          </div>
-
-          <div className="flex flex-col gap-4">
-            {providers.map(p => (
-              <div key={p.id} className="bg-[#1e1e20] p-4 rounded-lg border border-white/5 flex items-center justify-between hover:border-white/10 transition-all duration-150">
-                <div>
-                  <div className="flex items-center gap-3 mb-1">
-                    <span className="font-semibold text-[var(--text-primary)]">{p.name}</span>
-                    <span className="badge badge-success text-[10px] px-2 py-0.5">Active</span>
-                  </div>
-                  <div className="font-mono text-[var(--text-secondary)] text-xs opacity-80 tracking-widest">
-                    {p.apiKey}
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button className="p-2 rounded-md hover:bg-white/5 text-[var(--text-secondary)] hover:text-[var(--accent-green)] transition-colors" title="Verify Key" onClick={() => handleVerifyProvider(p.name)}>
-                    <ShieldCheck size={18} />
-                  </button>
-                  <button className="p-2 rounded-md hover:bg-white/5 text-[var(--text-secondary)] hover:text-[var(--accent-red)] transition-colors" title="Delete" onClick={() => handleRemoveProvider(p.name)}>
-                    <Trash2 size={18} />
-                  </button>
-                </div>
-              </div>
-            ))}
-            {providers.length === 0 && (
-              <div className="text-center p-6 bg-[#1e1e20] rounded-lg border border-white/5 border-dashed text-[var(--text-muted)] text-sm">
-                No providers configured yet.
-              </div>
-            )}
-          </div>
-
-          <div className="mt-auto pt-8 border-t border-white/5">
-            <h3 className="text-[1.125rem] font-semibold tracking-tight mb-4">Add New Key</h3>
-            <div className="flex flex-col gap-1.5 mb-4">
-              <label className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">Provider Name</label>
-              <select 
-                className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg py-2.5 px-3 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-purple)] transition-colors" 
-                value={newProviderName} 
-                onChange={e => setNewProviderName(e.target.value)}
+              <input
+                type="password"
+                placeholder={present ? "••••••••••••••••" : hint}
+                value={keyInputs[id] ?? ""}
+                onChange={e => setKeyInputs(k => ({ ...k, [id]: e.target.value }))}
+                className="flex-1 bg-transparent border border-white/10 rounded-lg px-3 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent-purple)]"
+              />
+              <button
+                onClick={() => saveKey(id)}
+                disabled={!keyInputs[id] || saving[id]}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[var(--accent-purple)] text-white text-xs disabled:opacity-30 shrink-0"
               >
-                <option value="Groq">Groq</option>
-                <option value="OpenAI">OpenAI</option>
-                <option value="Anthropic">Anthropic</option>
-                <option value="Mistral">Mistral</option>
-              </select>
-            </div>
-            <div className="flex flex-col gap-1.5 mb-6">
-              <label className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">API Key</label>
-              <input 
-                type="password" 
-                className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg py-2.5 px-3 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-purple)] transition-colors" 
-                placeholder="sk-..." 
-                value={newProviderKey} 
-                onChange={e => setNewProviderKey(e.target.value)} 
-              />
-            </div>
-            <button 
-              className="flex items-center justify-center gap-2 w-full bg-[#2a2a2d] hover:bg-[#3f3f46] text-[var(--text-primary)] text-sm font-medium py-2.5 px-4 rounded-lg transition-colors border border-white/5 disabled:opacity-50 disabled:cursor-not-allowed" 
-              onClick={handleAddProvider} 
-              disabled={!newProviderKey}
-            >
-              <Save size={16} /> Save Key Securely
-            </button>
-          </div>
-        </div>
-
-        <div className="glass-panel p-8 flex flex-col">
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-white/5 rounded-lg border border-white/5">
-                <Server className="text-[var(--accent-blue-light)]" size={24} />
-              </div>
-              <h2 className="text-[1.5rem] font-semibold tracking-tight">Model Routing</h2>
-            </div>
-            {routellmStatus ? (
-              <span className="badge badge-success text-xs">RouteLLM Active</span>
-            ) : (
-              <span className="badge bg-yellow-500/10 text-yellow-500 border border-yellow-500/20 text-xs animate-pulse-slow">Initializing RouteLLM...</span>
-            )}
-          </div>
-
-          <div className="mb-6 p-4 bg-[var(--accent-blue)]/10 rounded-lg border border-[var(--accent-blue)]/20">
-            <h4 className="text-sm font-semibold text-[var(--accent-blue-light)] mb-1">Semantic Routing Rules</h4>
-            <p className="text-xs text-[var(--text-secondary)] leading-relaxed">Requests scoring &lt; 0.5 complexity will route to Low Complexity models. Scores &ge; 0.5 route to High Complexity models dynamically.</p>
-          </div>
-
-          <div className="flex flex-col gap-4 overflow-y-auto max-h-[300px] pr-2">
-            {models.map(m => (
-              <div key={m.id} className="bg-[#1e1e20] p-4 rounded-lg border border-white/5 relative group">
-                <div className="flex justify-between items-start mb-2">
-                  <div className="flex items-center gap-3">
-                    <span className="font-semibold text-[var(--accent-purple-light)]">{m.alias}</span>
-                    <span className="badge bg-transparent border border-white/20 text-[var(--text-secondary)] text-[10px]">{m.tier}</span>
-                  </div>
-                  <button 
-                    className="p-1 rounded hover:bg-white/5 text-[var(--text-secondary)] opacity-0 group-hover:opacity-100 absolute top-2 right-2 transition-all" 
-                    title="Delete Route" 
-                    onClick={() => handleRemoveRoute(m.alias)}
-                  >
-                    <Trash2 size={16} className="hover:text-[var(--accent-red)]" />
-                  </button>
-                </div>
-                <div className="text-xs text-[var(--text-secondary)] mt-2">
-                  Maps to: <span className="font-mono text-[var(--text-primary)] bg-black/30 px-1.5 py-0.5 rounded ml-1">{m.actual}</span> <span className="opacity-60 ml-1">({m.provider})</span>
-                </div>
-              </div>
-            ))}
-            {models.length === 0 && (
-              <div className="text-center p-6 bg-[#1e1e20] rounded-lg border border-white/5 border-dashed text-[var(--text-muted)] text-sm">
-                No routes configured yet.
-              </div>
-            )}
-          </div>
-
-          <div className="mt-auto pt-8 border-t border-white/5">
-            <h3 className="text-[1.125rem] font-semibold tracking-tight mb-4">Add Route Mapping</h3>
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">Alias (e.g. fast-model)</label>
-                <input 
-                  type="text" 
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg py-2 px-3 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-purple)] transition-colors" 
-                  placeholder="Alias name" 
-                  value={newRouteAlias} 
-                  onChange={e => setNewRouteAlias(e.target.value)} 
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">Provider Name</label>
-                <select 
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg py-2 px-3 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-purple)] transition-colors" 
-                  value={newRouteProvider} 
-                  onChange={e => setNewRouteProvider(e.target.value)}
+                <Save size={12} /> Save
+              </button>
+              {present && (
+                <button
+                  onClick={() => deleteKey(id)}
+                  className="text-[var(--text-muted)] hover:text-[var(--accent-red)] p-1 shrink-0"
                 >
-                  <option value="Groq">Groq</option>
-                  <option value="OpenAI">OpenAI</option>
-                  <option value="Anthropic">Anthropic</option>
-                  <option value="Mistral">Mistral</option>
-                </select>
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          );
+        })}
+        <p className="text-xs text-[var(--text-muted)] mt-1">
+          Keys are stored encrypted in PostgreSQL. They are never shown after saving.
+        </p>
+      </div>
+
+      {/* Model Priority */}
+      <div className="glass-panel p-6 flex flex-col gap-6">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-secondary)]">
+            Model Priority
+          </h2>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            Drag to reorder. TAPIOD uses the first available model in each tier.
+            Greyed-out models are missing their API key.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-6">
+          {([
+            { tier: "fast",  label: "Fast Tier",  values: fastTier,  caption: "complexity < threshold" },
+            { tier: "heavy", label: "Heavy Tier", values: heavyTier, caption: "complexity ≥ threshold" },
+          ] as const).map(({ tier, label, values, caption }) => (
+            <div key={tier}>
+              <h3 className="text-xs uppercase tracking-wider text-[var(--text-muted)] mb-3">
+                {label} <span className="normal-case">({caption})</span>
+              </h3>
+              <Reorder.Group
+                axis="y"
+                values={values}
+                onReorder={(newOrder) => handleReorder(tier, newOrder)}
+                as="div"
+                className="flex flex-col gap-2"
+              >
+                {values.map((alias: string, i: number) => {
+                  const hasKey = keyPresentFor(alias);
+                  return (
+                    <Reorder.Item
+                      key={alias}
+                      value={alias}
+                      as="div"
+                      className="flex items-center gap-3 bg-white/5 rounded-lg p-3 border border-white/5 cursor-grab select-none"
+                      style={{ opacity: hasKey ? 1 : 0.35 }}
+                    >
+                      <GripVertical size={14} className="text-[var(--text-muted)] shrink-0" />
+                      <span className="text-xs text-[var(--text-muted)] w-4 shrink-0">{i + 1}</span>
+                      <span className="flex-1 text-sm text-[var(--text-primary)]">{alias}</span>
+                      {!hasKey && (
+                        <span className="text-xs bg-white/10 rounded px-2 py-0.5 text-[var(--text-muted)] shrink-0">
+                          No key
+                        </span>
+                      )}
+                    </Reorder.Item>
+                  );
+                })}
+              </Reorder.Group>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Fallback Behaviour */}
+      <div className="glass-panel p-6 flex flex-col gap-4">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-secondary)]">
+          Fallback Behaviour
+        </h2>
+        <p className="text-sm text-[var(--text-muted)]">
+          When a model fails (rate limit or quota exhausted), TAPIOD automatically
+          tries the next model in your priority list.
+        </p>
+        <div className="flex flex-col gap-3 mt-1">
+          {[
+            { label: "Fast tier chain",  values: fastTier  },
+            { label: "Heavy tier chain", values: heavyTier },
+          ].map(({ label, values }) => (
+            <div key={label} className="flex items-start gap-3">
+              <span className="text-xs text-[var(--text-muted)] w-36 pt-0.5 shrink-0">{label}</span>
+              <div className="flex items-center gap-1 flex-wrap">
+                {values.length === 0 ? (
+                  <span className="text-xs text-[var(--text-muted)]">—</span>
+                ) : values.map((alias: string, i: number) => (
+                  <span key={alias} className="flex items-center gap-1">
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded ${
+                        keyPresentFor(alias)
+                          ? "bg-[var(--accent-purple)]/20 text-[var(--text-primary)]"
+                          : "bg-white/5 text-[var(--text-muted)]"
+                      }`}
+                    >
+                      {alias}
+                    </span>
+                    {i < values.length - 1 && (
+                      <ChevronRight size={12} className="text-[var(--text-muted)]" />
+                    )}
+                  </span>
+                ))}
               </div>
             </div>
-            <div className="flex flex-col gap-1.5 mb-6">
-              <label className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider">Actual Model (e.g. llama-3.1-8b-instant)</label>
-              <input 
-                type="text" 
-                className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg py-2 px-3 text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-purple)] transition-colors" 
-                placeholder="Provider Model" 
-                value={newRouteActual} 
-                onChange={e => setNewRouteActual(e.target.value)} 
-              />
-            </div>
-            <button 
-              className="flex items-center justify-center gap-2 w-full bg-[#2a2a2d] hover:bg-[#3f3f46] text-[var(--text-primary)] text-sm font-medium py-2.5 px-4 rounded-lg transition-colors border border-white/5 disabled:opacity-50 disabled:cursor-not-allowed" 
-              onClick={handleAddRoute} 
-              disabled={!newRouteAlias || !newRouteActual}
-            >
-              <Plus size={16} /> Add Route Mapping
-            </button>
-          </div>
+          ))}
         </div>
+      </div>
+
+      {/* Thresholds */}
+      <div className="glass-panel p-6 flex flex-col gap-5">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-secondary)]">
+          Thresholds
+        </h2>
+        <SliderRow
+          label="KNN Routing threshold (fast vs heavy)"
+          configKey="complexity_threshold"
+          min={0.1} max={0.9} step={0.05} unit=""
+        />
+        <SliderRow
+          label="Semantic cache similarity threshold"
+          configKey="cache_similarity_threshold"
+          min={0.5} max={0.99} step={0.01} unit=""
+        />
+        <SliderRow
+          label="Redis cache TTL"
+          configKey="cache_ttl_seconds"
+          min={60} max={86400} step={60} unit="s"
+        />
+      </div>
+
+      {/* Guardrails — Coming Soon */}
+      <div className="glass-panel p-6 flex flex-col gap-4 opacity-70">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-secondary)] flex items-center gap-2">
+          <Lock size={14} /> Guardrails
+          <span className="text-xs bg-white/10 rounded px-2 py-0.5 ml-1">Coming Soon</span>
+        </h2>
+        <COMING_SOON_TOGGLE label="Block harmful content" />
+        <COMING_SOON_TOGGLE label="Max tokens per request" />
+        <COMING_SOON_TOGGLE label="Rate limit per tenant" />
+      </div>
+
+      {/* PII Masking — Coming Soon */}
+      <div className="glass-panel p-6 flex flex-col gap-4 opacity-70">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-secondary)] flex items-center gap-2">
+          <Lock size={14} /> PII Masking
+          <span className="text-xs bg-white/10 rounded px-2 py-0.5 ml-1">Coming Soon</span>
+        </h2>
+        <COMING_SOON_TOGGLE label="Mask email addresses" />
+        <COMING_SOON_TOGGLE label="Mask phone numbers" />
+        <COMING_SOON_TOGGLE label="Mask credit card numbers" />
+        <COMING_SOON_TOGGLE label="Restore PII in response" />
+        <p className="text-xs text-[var(--text-muted)] mt-2">Powered by Microsoft Presidio</p>
       </div>
     </div>
   );
