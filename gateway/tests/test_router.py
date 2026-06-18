@@ -44,17 +44,12 @@ def test_pick_provider_falls_back_when_tier_unavailable():
     provider = pick_provider(available, complexity_score=0.1)
     assert provider == "heavy-groq"
 
-import os as _os
-
 def test_get_available_providers_includes_anthropic_fast(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    # Re-import to pick up patched env
-    import importlib
-    import router as router_module
-    importlib.reload(router_module)
-    result = router_module.get_available_providers()
+    from router import get_available_providers
+    result = get_available_providers()
     assert "fast-anthropic" in result
     assert "heavy-anthropic" in result
 

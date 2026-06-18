@@ -11,6 +11,15 @@ PROVIDER_COST_RANK = {
     "heavy-anthropic": 25.00,
 }
 
+MODEL_MAP = {
+    "fast-groq":       "groq/llama-3.1-8b-instant",
+    "fast-openai":     "openai/gpt-4o-mini",
+    "fast-anthropic":  "anthropic/claude-sonnet-4-6",
+    "heavy-groq":      "groq/llama-3.3-70b-versatile",
+    "heavy-openai":    "openai/gpt-4o",
+    "heavy-anthropic": "anthropic/claude-opus-4-8",
+}
+
 _CONFIG_PATH = Path(__file__).parent / "routing_config.json"
 
 
@@ -76,14 +85,6 @@ def pick_provider(available: list[str], complexity_score: float) -> str:
 
 def get_costliest_available_model(available: list[str]) -> str:
     """Returns the litellm model string for the most expensive model in `available`."""
-    MODEL_MAP = {
-        "fast-groq":       "groq/llama-3.1-8b-instant",
-        "fast-openai":     "openai/gpt-4o-mini",
-        "fast-anthropic":  "anthropic/claude-sonnet-4-6",
-        "heavy-groq":      "groq/llama-3.3-70b-versatile",
-        "heavy-openai":    "openai/gpt-4o",
-        "heavy-anthropic": "anthropic/claude-opus-4-8",
-    }
     try:
         from litellm import cost_per_token
         best_alias = available[0]
@@ -112,14 +113,6 @@ def compute_routing_save(
     """Estimate USD saved vs calling the costliest available model directly."""
     try:
         from litellm import cost_per_token
-        MODEL_MAP = {
-            "fast-groq":       "groq/llama-3.1-8b-instant",
-            "fast-openai":     "openai/gpt-4o-mini",
-            "fast-anthropic":  "anthropic/claude-sonnet-4-6",
-            "heavy-groq":      "groq/llama-3.3-70b-versatile",
-            "heavy-openai":    "openai/gpt-4o",
-            "heavy-anthropic": "anthropic/claude-opus-4-8",
-        }
         baseline_model = get_costliest_available_model(available)
         chosen_model = MODEL_MAP.get(chosen, "groq/llama-3.1-8b-instant")
         base_in, base_out = cost_per_token(
