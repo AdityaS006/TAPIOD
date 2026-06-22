@@ -59,6 +59,15 @@ def main():
     print(f"\nConnecting to Qdrant at {QDRANT_URL}…")
     qd = QdrantClient(url=QDRANT_URL)
 
+    from qdrant_client.models import VectorParams, Distance
+    collections = [c.name for c in qd.get_collections().collections]
+    if COLLECTION not in collections:
+        print(f"Creating collection '{COLLECTION}'…")
+        qd.create_collection(
+            COLLECTION,
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+        )
+
     existing = qd.count(COLLECTION).count
     print(f"Clearing {existing} existing points…")
     if existing > 0:
