@@ -1,13 +1,36 @@
+# Dependencies
 node_modules/
 dist/
+gateway/venv/
+tapiod-sdk/tapiod.egg-info/
+
+# Environment secrets
 .env
 .env.*
 gateway/.env
-gateway/venv/
+
+# Python artifacts
 gateway/__pycache__/
+**/__pycache__/
 *.pyc
-.DS_Store
+*.pyo
+.pytest_cache/
+
+# Runtime / generated
 *.log
 *.jsonl
 hooks_debug.txt
+gateway/last_tools.json
+gateway/qdrant_cache/
+gateway/qdrant_data/
+
+# Test results
 gateway/tests/results/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+.next/
+*.xlsx
