@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct
+from qdrant_client.models import Distance, PointStruct, VectorParams
 from fastembed import TextEmbedding
 
 BATCH_SIZE   = 32
@@ -59,7 +59,6 @@ def main():
     print(f"\nConnecting to Qdrant at {QDRANT_URL}…")
     qd = QdrantClient(url=QDRANT_URL)
 
-    from qdrant_client.models import VectorParams, Distance
     collections = [c.name for c in qd.get_collections().collections]
     if COLLECTION not in collections:
         print(f"Creating collection '{COLLECTION}'…")
@@ -71,7 +70,6 @@ def main():
     existing = qd.count(COLLECTION).count
     print(f"Clearing {existing} existing points…")
     if existing > 0:
-        from qdrant_client.models import VectorParams, Distance
         info = qd.get_collection(COLLECTION)
         vec_size = info.config.params.vectors.size
         qd.delete_collection(COLLECTION)
