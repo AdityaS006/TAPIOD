@@ -1,6 +1,28 @@
 # TAPIOD — Local Setup Guide
 
-Complete instructions for running the full TAPIOD stack on a fresh machine.
+## Quickest path: one-command setup
+
+The repo ships with setup scripts that handle everything automatically.
+
+**Linux / macOS / WSL**
+```bash
+cp gateway/.env.example gateway/.env   # add GROQ_API_KEY=gsk_...
+chmod +x setup.sh && ./setup.sh
+```
+
+**Windows**
+```
+copy gateway\.env.example gateway\.env   # add GROQ_API_KEY=gsk_...
+setup.bat
+```
+
+That's it. The script installs dependencies, seeds Qdrant, builds the dashboard, and opens http://localhost:3000 when ready.
+
+---
+
+## Manual setup (step-by-step)
+
+Use this if the script fails or you want to understand each step.
 
 ## Prerequisites
 

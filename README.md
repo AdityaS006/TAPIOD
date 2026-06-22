@@ -10,32 +10,28 @@ TAPIOD sits between your app and any LLM provider and quietly makes every reques
 
 ## ⚡ 5-Minute Setup
 
+**One command. Everything installs, seeds, and launches automatically.**
+
+**Linux / macOS / WSL:**
 ```bash
-# 1. Clone and add your key
 git clone https://github.com/AdityaS006/TAPIOD.git && cd TAPIOD
-cp gateway/.env.example gateway/.env          # then edit: GROQ_API_KEY=gsk_...
-
-# 2. Start infrastructure (Qdrant + PostgreSQL + Redis)
-docker compose up -d
-
-# 3. Install + seed the routing brain (~3 min first run, downloads embed model)
-cd gateway && python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python seed_all.py
-
-# 4. Start the LiteLLM proxy            (new terminal, venv active)
-litellm --config litellm_config.yaml --port 4000
-
-# 5. Start the FastAPI gateway          (new terminal, venv active)
-uvicorn hooks:app --port 4001 --reload
-
-# 6. Start the dashboard                (new terminal)
-cd ../tapiod-web && npm install && npm run dev
+cp gateway/.env.example gateway/.env   # add your GROQ_API_KEY
+chmod +x setup.sh && ./setup.sh
 ```
 
-Open **http://localhost:3000** → send a prompt in the Playground → watch the trace light up.
+**Windows:**
+```
+git clone https://github.com/AdityaS006/TAPIOD.git
+cd TAPIOD
+copy gateway\.env.example gateway\.env   # add your GROQ_API_KEY
+setup.bat
+```
 
-> Full guide with prerequisites and troubleshooting: [**SETUP.md**](SETUP.md)
+The script handles everything: Docker infra → Python venv → pip install → Qdrant seeding → production build → launch all three services. Opens the dashboard automatically when ready.
+
+> Get a free Groq API key (no credit card) at **https://console.groq.com**
+
+> Full step-by-step guide and troubleshooting: [**SETUP.md**](SETUP.md)
 
 ---
 
