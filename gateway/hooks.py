@@ -103,12 +103,17 @@ def init_qdrant():
         else:
             print(f"[Init] routing_examples already has {qdrant.count('routing_examples').count} points.")
 
-        # Seed tool_registry if empty
+        # Seed tool_registry — re-seed whenever the count doesn't match MOCK_TOOLS
         from tools_registry import MOCK_TOOLS
         tool_count = qdrant.count("tool_registry").count
-        if tool_count == 0:
-            print("Seeding tool_registry...")
+        if tool_count != len(MOCK_TOOLS):
+            print(f"Seeding tool_registry ({tool_count} → {len(MOCK_TOOLS)} tools)...")
             import uuid as _uuid
+            qdrant.delete_collection("tool_registry")
+            qdrant.create_collection(
+                "tool_registry",
+                vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+            )
             descs = [t["function"]["description"] for t in MOCK_TOOLS]
             vecs = [v.tolist() for v in embedding_model.embed(descs)]
             points = [
@@ -894,7 +899,7 @@ class GatewayHooks(CustomLogger):
                 collection_name="tool_registry",
                 query=vec,
                 limit=3,
-                score_threshold=0.65,
+                score_threshold=0.58,
             )
             tools_to_inject = [json.loads(r.payload["tool_data"]) for r in tool_resp.points]
         except Exception:
