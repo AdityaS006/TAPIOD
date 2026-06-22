@@ -64,6 +64,26 @@ async def main():
 asyncio.run(main())
 ```
 
+## Async streaming
+
+```python
+import asyncio
+from tapiod import AsyncTapiodClient
+
+async def main():
+    async with AsyncTapiodClient() as client:
+        stream = await client.chat.completions.create(
+            model="fast-groq",
+            messages=[{"role": "user", "content": "Count from 1 to 5."}],
+            stream=True,
+        )
+        async for token in stream:
+            print(token, end="", flush=True)
+        print()
+
+asyncio.run(main())
+```
+
 ## Configuration
 
 | Parameter | Env var | Default |

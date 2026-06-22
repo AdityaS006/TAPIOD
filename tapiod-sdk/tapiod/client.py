@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-from typing import Iterator
+from typing import AsyncIterator, Iterator
 import httpx
 from .models import ChatCompletion
 
@@ -107,14 +107,43 @@ class _AsyncCompletions:
         self,
         messages: list[dict],
         model: str = "fast-groq",
+        stream: bool = False,
         **kwargs,
-    ) -> ChatCompletion:
+    ) -> "ChatCompletion | AsyncIterator[str]":
         payload = {"model": model, "messages": messages, **kwargs}
         headers = {"Authorization": f"Bearer {self._c.api_key}"}
         url = self._c.base_url + _AGENT_PATH
+
+        if stream:
+            return self._astream(url, headers, payload)
+
         resp = await self._c._http.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         return ChatCompletion(resp.json())
+
+    async def _astream(
+        self, url: str, headers: dict, payload: dict
+    ) -> AsyncIterator[str]:
+        import json as _json
+        payload = {**payload, "stream": True}
+        async with self._c._http.stream("POST", url, json=payload, headers=headers) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data in ("[DONE]", ""):
+                    break
+                if data.startswith("[TRACE]"):
+                    continue
+                try:
+                    chunk = _json.loads(data)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    token = delta.get("content")
+                    if token:
+                        yield token
+                except Exception:
+                    continue
 
 
 class _AsyncChat:
