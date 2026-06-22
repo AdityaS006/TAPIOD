@@ -4,8 +4,8 @@ One-command Qdrant seed — run this after `docker compose up -d`.
 Seeds:
   1. routing_examples  — 5 000 chatbot-arena prompts (fast/heavy labels)
                          source: gateway/arena_prompts.json
-  2. tool_registry     — weather tool embedding (auto-done by gateway on
-                         startup, but this ensures it exists for smoke tests)
+
+  tool_registry is seeded automatically by the gateway on startup.
 
 Usage:
   cd gateway
@@ -41,9 +41,8 @@ def main() -> None:
     run("seed_arena.py")
 
     print("\n✓ All collections seeded.")
-    print("  routing_examples  — 5 000 pts  (fast/heavy routing labels)")
-    print("  tool_registry     — seeded automatically by gateway on startup")
-    print("\nStart the gateway next:")
+    print("  routing_examples  — 5,000 pts  (fast/heavy routing labels)")
+    print("\nNext: start the gateway (tool_registry seeded automatically on startup):")
     print("  litellm --config litellm_config.yaml --port 4000 &")
     print("  uvicorn hooks:app --port 4001 --reload")
 

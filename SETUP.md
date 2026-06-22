@@ -96,7 +96,7 @@ Upserting 5,000 points…
 ✓ All collections seeded.
 ```
 
-> **Note:** If you re-run `seed_all.py` on a machine that already has the collection, it skips (idempotent).
+> **Note:** Re-running `seed_all.py` is safe — it clears and rebuilds the collection from scratch. It will re-download nothing (the embed model is cached after first run), but will re-embed all 5,000 prompts (~1–2 min).
 
 ---
 
