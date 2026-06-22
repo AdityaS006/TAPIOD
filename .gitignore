@@ -7,7 +7,9 @@ tapiod-sdk/tapiod.egg-info/
 # Environment secrets
 .env
 .env.*
+!.env.example
 gateway/.env
+!gateway/.env.example
 
 # Python artifacts
 gateway/__pycache__/
