@@ -1,17 +1,26 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, User, Clock, Zap, Sparkles, Plus, MessageSquare, Trash2, RefreshCw } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from "react";
+
+interface PipelineStep {
+  layer: string;
+  result: string;
+  latency_ms: number;
+}
+
+interface TapiodTrace {
+  pipeline: PipelineStep[];
+  actual_cost_usd: number;
+  total_saved_usd: number;
+  cache_source: string | null;
+  provider_model: string;
+  injected_memories: string[];
+  injected_tools: string[];
+}
 
 interface Message {
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
-  isError?: boolean;
-  meta?: {
-    latency?: number;
-    tokens?: number;
-    injected_tools?: string[];
-  };
 }
 
 interface ChatSession {
@@ -19,499 +28,321 @@ interface ChatSession {
   title: string;
   updatedAt: number;
   messages: Message[];
+  tenant_id?: string;
+  user_id?: string;
 }
+
+const USER_ID = "demo_user";
+const TENANT_ID = "default_tenant";
+
+const LAYER_ICONS: Record<string, string> = {
+  embed: "🔢",
+  redis_cache: "⚡",
+  qdrant_cache: "🔷",
+  memory_recall: "🧠",
+  knn_router: "🔀",
+  headroom: "🗜️",
+  tool_select: "🔧",
+  llm_call: "🤖",
+};
+
+const LAYER_LABELS: Record<string, string> = {
+  embed: "Embed",
+  redis_cache: "Redis L1",
+  qdrant_cache: "Qdrant L2",
+  memory_recall: "Memory",
+  knn_router: "KNN Router",
+  headroom: "Headroom",
+  tool_select: "Tools",
+  llm_call: "LLM Call",
+};
 
 export default function Playground() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [inputValue, setInputValue] = useState('');
-  const [isSending, setIsSending] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
-  
-  const [userId] = useState('demo_user');
-  const [tenantId] = useState('demo_tenant');
-  
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => `session_${Date.now()}`);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [trace, setTrace] = useState<TapiodTrace | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Load from backend
-  useEffect(() => {
-    const loadSessions = async () => {
-      try {
-        // Migration logic from LocalStorage
-        const localData = localStorage.getItem('tapiod_chat_sessions');
-        if (localData) {
-          try {
-            const parsed = JSON.parse(localData);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              for (const session of parsed) {
-                await fetch('http://localhost:4001/api/chats', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    ...session,
-                    user_id: userId,
-                    tenant_id: tenantId
-                  })
-                });
-              }
-            }
-            localStorage.removeItem('tapiod_chat_sessions');
-          } catch (e) {
-            console.error("Migration failed", e);
-          }
-        }
-
-        const res = await fetch(`http://localhost:4001/api/chats?user_id=${userId}&tenant_id=${tenantId}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (!data.error && Array.isArray(data)) {
-            setSessions(data);
-            if (data.length > 0) {
-              setActiveSessionId(data[0].id);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Failed to load sessions", err);
-      } finally {
-        setIsLoaded(true);
-      }
-    };
-    loadSessions();
-  }, [userId, tenantId]);
-
-  const saveSession = async (session: ChatSession) => {
+  const fetchSessions = useCallback(async () => {
     try {
-      await fetch('http://localhost:4001/api/chats', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...session,
-          user_id: userId,
-          tenant_id: tenantId
-        })
-      });
-    } catch (e) {
-      console.error("Failed to save session", e);
-    }
-  };
+      const res = await fetch(`/api/chats?user_id=${USER_ID}&tenant_id=${TENANT_ID}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setSessions(data);
+      }
+    } catch {}
+  }, []);
 
-  const activeSession = sessions.find(s => s.id === activeSessionId);
-  const messages = activeSession ? activeSession.messages : [];
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  useEffect(() => { fetchSessions(); }, [fetchSessions]);
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, isSending]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-  const createNewChat = () => {
-    setActiveSessionId(null);
+  const saveSession = useCallback(async (id: string, msgs: Message[]) => {
+    if (msgs.length === 0) return;
+    const firstUser = msgs.find(m => m.role === "user")?.content ?? "Untitled";
+    const title = firstUser.slice(0, 45) + (firstUser.length > 45 ? "…" : "");
+    try {
+      await fetch("/api/chats", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id,
+          title,
+          updatedAt: Date.now(),
+          messages: msgs,
+          tenant_id: TENANT_ID,
+          user_id: USER_ID,
+        }),
+      });
+      fetchSessions();
+    } catch {}
+  }, [fetchSessions]);
+
+  const loadSession = (session: ChatSession) => {
+    setCurrentSessionId(session.id);
+    setMessages(session.messages);
+    setTrace(null);
+    inputRef.current?.focus();
+  };
+
+  const newChat = () => {
+    setCurrentSessionId(`session_${Date.now()}`);
+    setMessages([]);
+    setTrace(null);
+    inputRef.current?.focus();
   };
 
   const deleteSession = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    const updated = sessions.filter(s => s.id !== id);
-    setSessions(updated);
-    if (activeSessionId === id) {
-      setActiveSessionId(updated.length > 0 ? updated[0].id : null);
-    }
     try {
-      await fetch(`http://localhost:4001/api/chats/${id}?user_id=${userId}&tenant_id=${tenantId}`, {
-        method: 'DELETE'
-      });
-    } catch (err) {
-      console.error("Failed to delete session", err);
-    }
+      await fetch(`/api/chats/${id}?user_id=${USER_ID}&tenant_id=${TENANT_ID}`, { method: "DELETE" });
+      setSessions(prev => prev.filter(s => s.id !== id));
+      if (id === currentSessionId) newChat();
+    } catch {}
   };
 
-  const handleSend = async () => {
-    if (!inputValue.trim()) return;
-
-    const userMsg: Message = { role: 'user', content: inputValue.trim() };
-    
-    let currentSessionId = activeSessionId;
-    let newSessions = [...sessions];
-
-    if (!currentSessionId) {
-      currentSessionId = Date.now().toString();
-      const titleWords = userMsg.content.split(' ').slice(0, 4);
-      const title = titleWords.join(' ') + (titleWords.length === 4 ? '...' : '');
-      const newSession: ChatSession = {
-        id: currentSessionId,
-        title: title || 'New Chat',
-        updatedAt: Date.now(),
-        messages: [userMsg]
-      };
-      newSessions = [newSession, ...newSessions];
-      setActiveSessionId(currentSessionId);
-    } else {
-      newSessions = newSessions.map(s => {
-        if (s.id === currentSessionId) {
-          return { ...s, messages: [...s.messages, userMsg], updatedAt: Date.now() };
-        }
-        return s;
-      });
-    }
-
-    setSessions(newSessions);
-    const updatedSession = newSessions.find(s => s.id === currentSessionId);
-    if (updatedSession) saveSession(updatedSession);
-
-    setInputValue('');
-    setIsSending(true);
-
-    const activeMessages = newSessions.find(s => s.id === currentSessionId)?.messages || [];
-
-    const payload: any = {
-      model: 'auto',
-      messages: activeMessages.map(m => ({ role: m.role, content: m.content }))
-    };
-
-    await sendPayload(payload, currentSessionId, newSessions);
-  };
-
-  const handleRegenerate = async (msgIndex: number) => {
-    if (!activeSessionId) return;
-    const session = sessions.find(s => s.id === activeSessionId);
-    if (!session) return;
-    
-    // Slice up to but NOT including the assistant message (so we keep the user message)
-    const newMessages = session.messages.slice(0, msgIndex);
-    
-    const newSessions = sessions.map(s => {
-      if (s.id === activeSessionId) {
-        return { ...s, messages: newMessages, updatedAt: Date.now() };
-      }
-      return s;
-    });
-    
-    setSessions(newSessions);
-    setIsSending(true);
-
-    const payload: any = {
-      model: 'auto',
-      messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-      metadata: { bypass_cache: true }
-    };
-    
-    await sendPayload(payload, activeSessionId, newSessions);
-  };
-
-  const sendPayload = async (payload: any, currentSessionId: string, newSessions: ChatSession[]) => {
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+    const userMsg: Message = { role: "user", content: input };
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
+    setInput("");
+    setLoading(true);
+    setTrace(null);
 
     try {
-      const startTime = Date.now();
-      const response = await fetch('http://localhost:4001/api/agent/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const res = await fetch("/api/agent/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "heavy-groq",
+          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+          user: USER_ID,
+          metadata: { session_id: currentSessionId },
+        }),
       });
-
-      const data = await response.json();
-      const endTime = Date.now();
-
-      const updatedSessions = [...newSessions];
-      const sessionIndex = updatedSessions.findIndex(s => s.id === currentSessionId);
-      
-      if (sessionIndex >= 0) {
-        let injectedTools: string[] = [];
-        try {
-          const toolsRes = await fetch(`http://localhost:4001/api/last_tools?tenant_id=${tenantId}&t=${Date.now()}`, {
-            cache: 'no-store'
-          });
-          if (toolsRes.ok) {
-            const toolsData = await toolsRes.json();
-            injectedTools = toolsData.tools || [];
-          }
-        } catch (e) {
-          console.error("Failed to fetch injected tools", e);
-        }
-
-        if (data.error) {
-          const errorMsg = typeof data.error === 'object' ? data.error.message || JSON.stringify(data.error) : String(data.error);
-          updatedSessions[sessionIndex].messages.push({ 
-            role: 'assistant', 
-            content: "LLM Error: " + errorMsg, 
-            isError: true,
-            meta: { injected_tools: injectedTools, latency: endTime - startTime }
-          });
-        } else {
-          let content = data.choices && data.choices[0] ? data.choices[0].message.content : null;
-          if (!content && data.choices && data.choices[0]?.message?.tool_calls) {
-            content = "LLM generated Tool Calls:\n" + JSON.stringify(data.choices[0].message.tool_calls, null, 2);
-          } else if (!content) {
-            content = "No content returned.";
-          }
-          
-          const meta = {
-            latency: endTime - startTime,
-            tokens: data.usage?.total_tokens,
-            injected_tools: injectedTools
-          };
-          updatedSessions[sessionIndex].messages.push({ role: 'assistant', content, meta });
-        }
-        setSessions(updatedSessions);
-        saveSession(updatedSessions[sessionIndex]);
-      }
-    } catch (err: any) {
-      const updatedSessions = [...newSessions];
-      const sessionIndex = updatedSessions.findIndex(s => s.id === currentSessionId);
-      if (sessionIndex >= 0) {
-        updatedSessions[sessionIndex].messages.push({ role: 'assistant', content: err.message || 'Failed to connect to gateway', isError: true });
-        setSessions(updatedSessions);
-        saveSession(updatedSessions[sessionIndex]);
-      }
+      const data = await res.json();
+      const content = data?.choices?.[0]?.message?.content ?? "No response.";
+      const allMessages: Message[] = [...newMessages, { role: "assistant", content }];
+      setMessages(allMessages);
+      if (data._tapiod_trace) setTrace(data._tapiod_trace);
+      await saveSession(currentSessionId, allMessages);
+    } catch {
+      setMessages(prev => [...prev, { role: "assistant", content: "Error reaching gateway." }]);
     } finally {
-      setIsSending(false);
+      setLoading(false);
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+  const formatTime = (ts: number) => {
+    const d = new Date(ts);
+    const now = new Date();
+    const diffH = (now.getTime() - d.getTime()) / 3600000;
+    if (diffH < 24) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString([], { month: "short", day: "numeric" });
   };
-
-  const isInitialState = messages.length === 0;
-
-  const [greeting] = useState(() => {
-    const greetings = [
-      "Your move!",
-      "Ready to test?",
-      "What shall we route today?",
-      "Let's build something great.",
-      "What's on your mind?",
-      "How can TAPIOD help?",
-      "Ask me anything."
-    ];
-    return greetings[Math.floor(Math.random() * greetings.length)];
-  });
-
-  if (!isLoaded) return <div className="flex-1 flex items-center justify-center text-gray-500">Loading...</div>;
 
   return (
-    <div className="absolute inset-0 flex overflow-hidden bg-transparent">
-      {/* Sidebar for Chat History */}
-      <div className="w-[260px] flex-shrink-0 border-r border-white/5 bg-black/20 flex flex-col h-full z-20 relative">
-        <div className="p-4">
-          <button 
-            onClick={createNewChat}
-            className="w-full flex items-center gap-2 px-4 py-3 bg-[var(--accent-purple-light)]/10 hover:bg-[var(--accent-purple-light)]/20 text-[var(--accent-purple-light)] rounded-xl transition-colors border border-[var(--accent-purple-light)]/20 font-medium text-sm"
+    <div className="flex h-full gap-4">
+      {/* Sessions sidebar */}
+      <div className="w-52 glass-panel p-4 flex flex-col gap-3 overflow-hidden">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold uppercase tracking-widest text-[var(--text-secondary)]">Chats</span>
+          <button
+            onClick={newChat}
+            className="text-[10px] px-2 py-1 rounded bg-[var(--accent-purple)]/20 text-[var(--accent-purple-light)] hover:bg-[var(--accent-purple)]/30 transition-colors"
           >
-            <Plus size={18} />
-            New Session
+            + New
           </button>
         </div>
-        
-        <div className="flex-1 overflow-y-auto px-2 pb-4 flex flex-col gap-1">
-          <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-            Recent Chats
-          </div>
-          {sessions.length === 0 ? (
-            <div className="px-3 py-4 text-sm text-gray-600 text-center">No previous sessions</div>
-          ) : (
-            sessions.map(session => (
-              <div 
-                key={session.id}
-                onClick={() => setActiveSessionId(session.id)}
-                className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
-                  activeSessionId === session.id 
-                    ? 'bg-white/10 text-gray-100' 
-                    : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
-                }`}
-              >
-                <div className="flex items-center gap-3 overflow-hidden">
-                  <MessageSquare size={16} className={activeSessionId === session.id ? 'text-[var(--accent-purple-light)]' : 'text-gray-500'} />
-                  <span className="text-sm truncate font-medium">{session.title}</span>
-                </div>
-                <button 
-                  onClick={(e) => deleteSession(e, session.id)}
-                  className="opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-all p-1"
+        <div className="flex-1 overflow-y-auto flex flex-col gap-1">
+          {sessions.length === 0 && (
+            <p className="text-[10px] text-[var(--text-muted)] mt-2">No saved chats yet.</p>
+          )}
+          {sessions.map(s => (
+            <div
+              key={s.id}
+              onClick={() => loadSession(s)}
+              className={`group flex flex-col gap-0.5 p-2 rounded-lg cursor-pointer transition-colors ${
+                s.id === currentSessionId
+                  ? "bg-[var(--accent-purple)]/20 border border-[var(--accent-purple)]/30"
+                  : "hover:bg-white/5 border border-transparent"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-1">
+                <span className="text-xs text-[var(--text-primary)] line-clamp-2 leading-tight flex-1">
+                  {s.title}
+                </span>
+                <button
+                  onClick={e => deleteSession(e, s.id)}
+                  className="opacity-0 group-hover:opacity-100 text-[var(--text-muted)] hover:text-red-400 text-xs shrink-0 mt-0.5"
                 >
-                  <Trash2 size={14} />
+                  ✕
                 </button>
               </div>
-            ))
-          )}
+              <span className="text-[10px] text-[var(--text-muted)]">{formatTime(s.updatedAt)}</span>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col h-full relative">
-        {/* Dynamic Background Glow for Initial State */}
-        {isInitialState && (
-          <div className="absolute inset-0 overflow-hidden flex items-center justify-center pointer-events-none">
-            <div 
-              className="w-[80vw] h-[80vw] max-w-[800px] max-h-[800px]"
-              style={{ background: 'radial-gradient(circle, rgba(59, 130, 246, 0.08) 0%, transparent 60%)' }} 
-            />
+      {/* Chat panel */}
+      <div className="flex-1 flex flex-col glass-panel p-6">
+        <h1 className="text-xl font-bold mb-4">Playground</h1>
+        <div className="flex-1 overflow-y-auto flex flex-col gap-3 mb-4">
+          {messages.length === 0 && (
+            <p className="text-[var(--text-muted)] text-sm">
+              Send a message. Watch the pipeline panel light up on the right.
+            </p>
+          )}
+          {messages.map((m, i) => (
+            <div key={i} className={`rounded-lg p-3 text-sm ${
+              m.role === "user"
+                ? "bg-[var(--accent-purple)]/10 border border-[var(--accent-purple)]/20 self-end max-w-[80%]"
+                : "bg-white/5 border border-white/5 self-start max-w-[90%]"
+            }`}>
+              <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                {m.role === "user" ? "You" : "TAPIOD"}
+              </p>
+              <p className="text-[var(--text-primary)] whitespace-pre-wrap">{m.content}</p>
+            </div>
+          ))}
+          {loading && (
+            <div className="self-start bg-white/5 border border-white/5 rounded-lg p-3 text-sm text-[var(--text-muted)] animate-pulse">
+              Processing through pipeline…
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+        <div className="flex gap-2">
+          <input
+            ref={inputRef}
+            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent-purple-light)]"
+            placeholder="Type a message…"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && sendMessage()}
+          />
+          <button
+            onClick={sendMessage}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg bg-[var(--accent-purple)] text-white text-sm font-medium disabled:opacity-50"
+          >
+            Send
+          </button>
+        </div>
+      </div>
+
+      {/* Pipeline panel */}
+      <div className="w-72 glass-panel p-6 flex flex-col gap-4 overflow-y-auto">
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-secondary)]">
+          Pipeline
+        </h2>
+
+        {!trace && !loading && (
+          <p className="text-[var(--text-muted)] text-xs">Pipeline trace will appear here after each request.</p>
+        )}
+        {loading && (
+          <div className="flex flex-col gap-2">
+            {["embed","redis_cache","qdrant_cache","memory_recall","knn_router","headroom","tool_select"].map(layer => (
+              <div key={layer} className="flex items-center gap-2 opacity-40 animate-pulse">
+                <span>{LAYER_ICONS[layer]}</span>
+                <span className="text-xs text-[var(--text-muted)]">{LAYER_LABELS[layer]}…</span>
+              </div>
+            ))}
           </div>
         )}
 
-        <div className={`flex-1 flex flex-col overflow-hidden relative z-10 items-center ${isInitialState ? 'justify-center' : 'justify-start'}`}>
-          {isInitialState ? (
-            <div className="w-full flex flex-col items-center px-5">
-              <h1 className="text-[2.5rem] font-normal text-[#e5e7eb] mb-10 tracking-tight font-sans text-center">
-                {greeting}
-              </h1>
-
-              {/* Initial Pill Input */}
-              <div className="w-full max-w-[750px] relative">
-                <div className="flex items-center bg-[#1e1f22] rounded-[32px] py-2 px-3 border border-white/5 shadow-[0_10px_40px_rgba(0,0,0,0.4)]">
-                  <div className="pl-4 pr-2 text-gray-400 flex items-center">
-                    <Sparkles size={24} />
-                  </div>
-                  <textarea
-                    className="flex-1 bg-transparent border-none py-[14px] px-2 text-[1.1rem] text-gray-100 resize-none outline-none min-h-[30px] max-h-[200px] font-inherit leading-[1.4]"
-                    placeholder="Ask TAPIOD..."
-                    rows={1}
-                    value={inputValue}
-                    onChange={(e) => {
-                      setInputValue(e.target.value);
-                      e.target.style.height = 'auto';
-                      e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
-                    }}
-                    onKeyDown={handleKeyDown}
-                    disabled={isSending}
-                  />
-                  <button
-                    className={`p-3 rounded-full flex items-center justify-center ml-1 transition-all duration-200 ${
-                      inputValue.trim() && !isSending 
-                        ? 'bg-white/10 text-white cursor-pointer' 
-                        : 'bg-transparent text-gray-600 cursor-not-allowed'
-                    }`}
-                    onClick={handleSend}
-                    disabled={!inputValue.trim() || isSending}
+        {trace && (
+          <>
+            <div className="flex flex-col gap-2">
+              {trace.pipeline.map((step, i) => {
+                const isHit = step.result.toLowerCase().includes("hit");
+                const isMiss = step.result.toLowerCase().includes("miss");
+                return (
+                  <div
+                    key={i}
+                    className="flex flex-col gap-1 bg-white/5 rounded-lg p-2 border border-white/5"
                   >
-                    <Send size={20} />
-                  </button>
-                </div>
-              </div>
-              <div className="mt-6 text-sm text-gray-500 font-medium text-center">
-                Powered by LiteLLM and RouteLLM
-              </div>
-            </div>
-          ) : (
-            <div className="w-full max-w-[850px] flex flex-col h-full">
-              {/* Chat History */}
-              <div className="flex-1 overflow-y-auto px-5 py-6 flex flex-col gap-10">
-                {messages.map((msg, idx) => (
-                  <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`flex gap-5 max-w-[85%] ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                      <div className={`rounded-full h-10 w-10 flex items-center justify-center shrink-0 overflow-hidden ${
-                        msg.role === 'user' ? 'bg-[#2a2a2d] text-gray-300' : 'bg-transparent text-purple-500'
-                      }`}>
-                        {msg.role === 'user' ? <User size={22} /> : <img src="/logo.png" alt="TAPIOD" className="w-full h-full object-contain" />}
-                      </div>
-
-                      <div className="flex flex-col gap-2 pt-2">
-                        <div className={`text-[1.05rem] leading-[1.6] whitespace-pre-wrap ${
-                          msg.role === 'user' 
-                            ? 'bg-[#2a2a2d] text-gray-100 py-3.5 px-6 rounded-3xl rounded-tr-md' 
-                            : msg.isError ? 'text-red-500' : 'text-gray-200'
-                        }`}>
-                          {msg.content}
-                        </div>
-
-                        {msg.meta && (
-                          <div className="flex flex-col">
-                            <div className="flex items-center gap-4 text-[0.8rem] mt-1 text-gray-500 font-mono">
-                              {msg.meta.latency && (
-                                <span className="flex items-center gap-1.5">
-                                  <Clock size={14} /> {(msg.meta.latency / 1000).toFixed(2)}s
-                                </span>
-                              )}
-                              {msg.meta.tokens && (
-                                <span className="flex items-center gap-1.5">
-                                  <Zap size={14} /> {msg.meta.tokens} tkns
-                                </span>
-                              )}
-                            </div>
-                            
-                            {msg.meta.injected_tools && msg.meta.injected_tools.length > 0 && (
-                              <div className="flex items-center gap-3 mt-4 flex-wrap">
-                                <span className="text-[0.65rem] font-bold text-gray-500 uppercase tracking-wider">Injected Tools:</span>
-                                {msg.meta.injected_tools.map((tool: string, i: number) => (
-                                  <div key={i} className="bg-purple-500/10 border border-purple-500/20 text-purple-300 px-3 py-1 rounded-full text-[0.75rem] font-mono whitespace-nowrap">
-                                    {tool}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        
-                        {msg.role === 'assistant' && !isSending && idx === messages.length - 1 && (
-                          <div className="flex items-center mt-2">
-                             <button 
-                               onClick={() => handleRegenerate(idx)} 
-                               className="text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1.5 text-xs bg-white/5 px-3 py-1.5 rounded-full"
-                               title="Bypass Cache and Regenerate"
-                             >
-                               <RefreshCw size={14} /> Regenerate
-                             </button>
-                          </div>
-                        )}
-                      </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium flex items-center gap-1.5">
+                        <span>{LAYER_ICONS[step.layer] ?? "•"}</span>
+                        <span style={{ color: isHit ? "var(--accent-green)" : isMiss ? "var(--text-muted)" : "var(--text-primary)" }}>
+                          {LAYER_LABELS[step.layer] ?? step.layer}
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-[var(--text-muted)]">{step.latency_ms.toFixed(1)}ms</span>
                     </div>
+                    <span className="text-[10px] text-[var(--text-secondary)] pl-5">{step.result}</span>
                   </div>
+                );
+              })}
+            </div>
+
+            <div className="border-t border-white/5 pt-4 flex flex-col gap-2">
+              <div className="flex justify-between text-xs">
+                <span className="text-[var(--text-muted)]">Actual cost</span>
+                <span className={trace.cache_source ? "text-[var(--accent-green)] font-bold" : "text-[var(--accent-red)]"}>
+                  {trace.cache_source ? "$0.00" : `$${trace.actual_cost_usd.toFixed(6)}`}
+                </span>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-[var(--text-muted)]">Saved (est.)</span>
+                <span className="text-[var(--accent-green)]">${trace.total_saved_usd.toFixed(6)}</span>
+              </div>
+              {trace.provider_model && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-[var(--text-muted)]">Provider</span>
+                  <span className="text-[var(--accent-blue-light)]">{trace.provider_model}</span>
+                </div>
+              )}
+            </div>
+
+            {trace.injected_memories.length > 0 && (
+              <div className="border-t border-white/5 pt-4">
+                <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-2">Recalled memories</p>
+                {trace.injected_memories.map((m, i) => (
+                  <p key={i} className="text-xs text-[var(--text-secondary)] mb-1">📌 {m}</p>
                 ))}
-
-                {isSending && (
-                  <div className="flex justify-start">
-                    <div className="flex gap-5 max-w-[85%]">
-                      <div className="rounded-full h-10 w-10 flex items-center justify-center shrink-0 overflow-hidden">
-                        <img src="/logo.png" alt="Thinking..." className="w-full h-full object-contain animate-pulse-slow" />
-                      </div>
-                      <div className="text-[1.05rem] text-gray-400 flex items-center pt-2">
-                        Generating response...
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div ref={messagesEndRef} className="h-6" />
               </div>
+            )}
 
-              {/* Bottom Input Area */}
-              <div className="px-5 pb-8 w-full">
-                <div className="flex items-center bg-[#1e1f22] rounded-[32px] py-1.5 px-2.5 border border-white/5 shadow-[0_4px_24px_rgba(0,0,0,0.3)]">
-                  <div className="pl-4 pr-2 text-gray-500 flex items-center">
-                    <Sparkles size={24} />
-                  </div>
-                  <textarea
-                    className="flex-1 bg-transparent border-none py-3 px-2 text-[1.05rem] text-gray-200 resize-none outline-none min-h-[28px] max-h-[150px] font-inherit leading-[1.4]"
-                    placeholder="Ask TAPIOD..."
-                    rows={1}
-                    value={inputValue}
-                    onChange={(e) => {
-                      setInputValue(e.target.value);
-                      e.target.style.height = 'auto';
-                      e.target.style.height = `${Math.min(e.target.scrollHeight, 150)}px`;
-                    }}
-                    onKeyDown={handleKeyDown}
-                    disabled={isSending}
-                  />
-                  <button
-                    className={`p-2.5 rounded-full flex items-center justify-center ml-1 transition-all duration-200 ${
-                      inputValue.trim() && !isSending 
-                        ? 'bg-white/10 text-white cursor-pointer' 
-                        : 'bg-transparent text-gray-600 cursor-not-allowed'
-                    }`}
-                    onClick={handleSend}
-                    disabled={!inputValue.trim() || isSending}
-                  >
-                    <Send size={18} />
-                  </button>
-                </div>
+            {trace.injected_tools.length > 0 && (
+              <div className="border-t border-white/5 pt-4">
+                <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-2">Tools injected</p>
+                {trace.injected_tools.filter(Boolean).map((t, i) => (
+                  <p key={i} className="text-xs text-[var(--text-secondary)] mb-1">🔧 {t}</p>
+                ))}
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

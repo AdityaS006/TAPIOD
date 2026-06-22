@@ -236,16 +236,16 @@ Defined in `litellm_config.yaml`. Within each tier, models are ranked by cost. T
 
 ```
 FAST TIER (score < 0.5):
-  1. fast-groq      groq/llama-3.1-8b-instant     $0.06/M blended
-  2. fast-openai    openai/gpt-4o-mini             $0.30/M blended
+  1. fast-groq      groq/llama-3.1-8b-instant     $0.06/M blended  ← active (demo)
+  2. fast-openai    openai/gpt-4o-mini             $0.30/M blended  ← inactive until key added
 
 HEAVY TIER (score ≥ 0.5):
-  1. heavy-groq      groq/llama-3.3-70b-versatile  $0.69/M blended
-  2. heavy-anthropic anthropic/claude-3-5-sonnet   $3.00/M blended
-  3. heavy-openai    openai/gpt-4o                 $6.25/M blended
+  1. heavy-groq      groq/llama-3.3-70b-versatile  $0.69/M blended  ← active (demo)
+  2. heavy-anthropic anthropic/claude-3-5-sonnet   $3.00/M blended  ← inactive until key added
+  3. heavy-openai    openai/gpt-4o                 $6.25/M blended  ← inactive until key added
 ```
 
-If the top provider is unavailable or rate-limited, LiteLLM's existing fallback mechanism tries the next in the list automatically.
+**Demo uses Groq only.** The tier list is pre-populated in `litellm_config.yaml` with all providers but only `GROQ_API_KEY` is required to run. OpenAI and Anthropic entries are present so the config UI shows the arbitrage story — they activate the moment an operator adds the corresponding API key. LiteLLM skips unconfigured providers automatically via its fallback mechanism.
 
 ### 5.3 Operator Controls
 

@@ -1,21 +1,26 @@
 import json
 import os
+import threading
 from pathlib import Path
 
 PROVIDER_COST_RANK = {
     "fast-groq":       0.06,
+    "fast-gemini":     0.15,
     "fast-openai":     0.60,
-    "fast-anthropic":  15.00,
+    "fast-anthropic":  1.25,   # Haiku: $0.25/MTok in, $1.25/MTok out
     "heavy-groq":      0.89,
+    "heavy-gemini":    1.25,
     "heavy-openai":    10.00,
-    "heavy-anthropic": 25.00,
+    "heavy-anthropic": 75.00,  # Opus 4.8: $15/MTok in, $75/MTok out
 }
 
 MODEL_MAP = {
     "fast-groq":       "groq/llama-3.1-8b-instant",
+    "fast-gemini":     "gemini/gemini-3.1-flash",
     "fast-openai":     "openai/gpt-4o-mini",
     "fast-anthropic":  "anthropic/claude-sonnet-4-6",
     "heavy-groq":      "groq/llama-3.3-70b-versatile",
+    "heavy-gemini":    "gemini/gemini-3.1-pro",
     "heavy-openai":    "openai/gpt-4o",
     "heavy-anthropic": "anthropic/claude-opus-4-8",
 }
@@ -41,8 +46,69 @@ def save_routing_config(config: dict):
         json.dump(config, f, indent=2)
 
 
+# ── RouteLLM MF router (lazy-initialised, thread-safe) ────────────────────────
+_rl_lock       = threading.Lock()
+_rl_controller = None
+_rl_broken     = False
+
+# Threshold calibrated by LMSys on Chatbot-Arena data.
+# 0.11875 → routes ~28 % of queries to the weak model while preserving ~95 % quality.
+# Raise toward 0.5 to send more queries to the cheap model.
+MF_THRESHOLD = 0.11875
+
+
+def _get_routellm():
+    global _rl_controller, _rl_broken
+    if _rl_broken:
+        return None
+    if _rl_controller is not None:
+        return _rl_controller
+    with _rl_lock:
+        if _rl_controller is not None:
+            return _rl_controller
+        try:
+            # similarity_weighted router imports OpenAI eagerly at module level;
+            # set a placeholder so the import doesn't crash, the MF router only
+            # uses it at inference time (with the real key from os.environ).
+            os.environ.setdefault("OPENAI_API_KEY", "placeholder")
+            from routellm.controller import Controller
+            _rl_controller = Controller(
+                routers=["mf"],
+                strong_model="gpt-4o",        # name doesn't matter — we only use the score
+                weak_model="gpt-4o-mini",
+                progress_bar=False,
+            )
+            print("[Router] RouteLLM MF controller ready")
+            return _rl_controller
+        except Exception as e:
+            print(f"[Router] RouteLLM init failed ({e}), falling back to KNN")
+            _rl_broken = True
+            return None
+
+
+def routellm_classify(prompt: str, qdrant=None, vec: list | None = None) -> float:
+    """
+    Primary routing classifier using RouteLLM's Matrix Factorization router.
+    Trained on 50k+ Chatbot-Arena preference pairs — knows when Opus is really needed.
+    Returns 0.0 (fast tier) or 1.0 (heavy tier).
+    Falls back to KNN (Qdrant) if RouteLLM is unavailable.
+    """
+    controller = _get_routellm()
+    if controller is not None:
+        try:
+            result = controller.route(prompt, "mf", threshold=MF_THRESHOLD)
+            # result is the model name: "gpt-4o" → heavy, "gpt-4o-mini" → fast
+            score = 1.0 if result == "gpt-4o" else 0.0
+            return score
+        except Exception as e:
+            print(f"[Router] RouteLLM route() failed ({e}), falling back to KNN")
+
+    # KNN fallback
+    return knn_classify(qdrant, vec)
+
+
 def knn_classify(qdrant, vec: list, top_k: int = 5) -> float:
-    """Returns complexity score 0.0-1.0. >= threshold -> heavy tier."""
+    """Fallback: KNN vote on routing_examples collection in Qdrant."""
     try:
         results = qdrant.query_points(
             collection_name="routing_examples",
@@ -61,6 +127,8 @@ def get_available_providers() -> list[str]:
     available = []
     if os.getenv("GROQ_API_KEY"):
         available += ["fast-groq", "heavy-groq"]
+    if os.getenv("GEMINI_API_KEY"):
+        available += ["fast-gemini", "heavy-gemini"]
     if os.getenv("OPENAI_API_KEY"):
         available += ["fast-openai", "heavy-openai"]
     if os.getenv("ANTHROPIC_API_KEY"):

@@ -15,6 +15,11 @@ model_list:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
 
+  - model_name: fast-gemini
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
   - model_name: fast-anthropic
     litellm_params:
       model: anthropic/claude-sonnet-4-6
@@ -31,6 +36,11 @@ model_list:
       model: anthropic/claude-opus-4-8
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  - model_name: heavy-gemini
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+
   - model_name: heavy-openai
     litellm_params:
       model: openai/gpt-4o
@@ -42,5 +52,7 @@ router_settings:
   fallbacks:
     - {"fast-openai": ["fast-groq"]}
     - {"fast-anthropic": ["fast-groq"]}
+    - {"fast-gemini": ["fast-groq"]}
     - {"heavy-openai": ["heavy-groq"]}
     - {"heavy-anthropic": ["heavy-groq"]}
+    - {"heavy-gemini": ["heavy-groq"]}

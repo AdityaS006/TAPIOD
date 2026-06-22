@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Activity, Settings, BarChart2, Terminal, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Activity, Settings, BarChart2, Terminal, PanelLeftClose, PanelLeftOpen, Brain } from 'lucide-react';
 
 const Sidebar = () => {
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -14,7 +14,7 @@ const Sidebar = () => {
   useEffect(() => {
     const checkStatus = async () => {
       try {
-        const res = await fetch('http://localhost:4001/api/config');
+        const res = await fetch('/api/config');
         setIsBackendOnline(res.ok);
       } catch (err) {
         setIsBackendOnline(false);
@@ -30,6 +30,7 @@ const Sidebar = () => {
     { name: 'Input/Output', path: '/playground', icon: Terminal },
     { name: 'Configuration', path: '/config', icon: Settings },
     { name: 'Observability', path: '/observability', icon: BarChart2 },
+    { name: 'Memory', path: '/memory', icon: Brain },
   ];
 
   return (
@@ -38,7 +39,7 @@ const Sidebar = () => {
       animate={{ width: isCollapsed ? 88 : 260 }}
       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
       className="glass-panel flex flex-col rounded-none border-y-0 border-l-0 relative z-20 shrink-0" 
-      style={{ height: '100vh', padding: '24px 16px', overflow: 'visible' }}
+      style={{ height: '100%', padding: '24px 16px', overflow: 'hidden' }}
     >
       {/* Header */}
       <div className="flex items-center mb-8 h-10 px-1 overflow-visible whitespace-nowrap">

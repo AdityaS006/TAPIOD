@@ -40,7 +40,7 @@ _HEADROOM_MODEL_MAP = {
 from context import RequestContext
 from cache import redis_get, redis_set, qdrant_cache_get, qdrant_cache_set
 from memory import memory_retrieve, build_memory_system_block, memory_extract_and_store
-from router import knn_classify, pick_provider, get_available_providers, compute_routing_save, load_routing_config, save_routing_config, get_costliest_available_model
+from router import routellm_classify, knn_classify, pick_provider, get_available_providers, compute_routing_save, load_routing_config, save_routing_config, get_costliest_available_model
 from cost import estimate_cache_save, estimate_memory_tokens_saved, seconds_to_ms
 from tool_executor import execute_tool
 
@@ -148,6 +148,32 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     await init_db()
+    await _restore_provider_keys()
+
+
+async def _restore_provider_keys():
+    """On restart, reload encrypted API keys from Postgres into os.environ
+    so LiteLLM and RouteLLM pick up the real keys without user re-entering them."""
+    try:
+        from crypto import decrypt_key
+        conn = await asyncpg.connect(DB_DSN)
+        rows = await conn.fetch(
+            "SELECT provider, enc_key FROM provider_keys WHERE tenant_id = 'default_tenant'"
+        )
+        await conn.close()
+        restored = []
+        for row in rows:
+            env_var = PROVIDER_ENV_MAP.get(row["provider"])
+            if env_var:
+                try:
+                    os.environ[env_var] = decrypt_key(row["enc_key"])
+                    restored.append(row["provider"])
+                except Exception:
+                    pass
+        if restored:
+            print(f"[Startup] Restored API keys for: {', '.join(restored)}")
+    except Exception as e:
+        print(f"[Startup] Could not restore provider keys: {e}")
 
 async def init_db():
     try:
@@ -784,10 +810,9 @@ class GatewayHooks(CustomLogger):
                     baseline_model=get_costliest_available_model(get_available_providers()),
                 )
                 ctx.record("redis_cache", "HIT", redis_ms)
-                req_id = str(uuid.uuid4())
-                _store_ctx(req_id, ctx)
+                _store_ctx(trace_id, ctx)
                 data["mock_response"] = json.loads(cached)
-                data.setdefault("metadata", {})["_tapiod_req_id"] = req_id
+                data.setdefault("metadata", {})["_tapiod_req_id"] = trace_id
                 data["tenant_id"] = tenant_id
                 return data
             ctx.record("redis_cache", "miss", redis_ms)
@@ -811,10 +836,9 @@ class GatewayHooks(CustomLogger):
                         "model": "cached", "usage": {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}}
                 if services_status["redis_ready"] and redis_client:
                     redis_set(redis_client, tenant_id, model, messages, json.dumps(mock))
-                req_id = str(uuid.uuid4())
-                _store_ctx(req_id, ctx)
+                _store_ctx(trace_id, ctx)
                 data["mock_response"] = mock
-                data.setdefault("metadata", {})["_tapiod_req_id"] = req_id
+                data.setdefault("metadata", {})["_tapiod_req_id"] = trace_id
                 data["tenant_id"] = tenant_id
                 return data
             ctx.record("qdrant_cache", "miss", qdrant_ms)
@@ -832,9 +856,9 @@ class GatewayHooks(CustomLogger):
         else:
             ctx.record("memory_recall", "none", mem_ms)
 
-        # --- KNN routing ---
+        # --- RouteLLM MF routing (falls back to KNN if OpenAI key unavailable) ---
         t0 = time.perf_counter()
-        complexity = knn_classify(qdrant, vec)
+        complexity = routellm_classify(prompt, qdrant=qdrant, vec=vec)
         available = get_available_providers()
         chosen = pick_provider(available, complexity)
         route_ms = seconds_to_ms(time.perf_counter() - t0)
@@ -889,11 +913,10 @@ class GatewayHooks(CustomLogger):
         else:
             ctx.record("tool_select", "none", tool_ms)
 
-        req_id = str(uuid.uuid4())
-        _store_ctx(req_id, ctx)
+        _store_ctx(trace_id, ctx)
         data["messages"] = messages
         data["tenant_id"] = tenant_id
-        data.setdefault("metadata", {})["_tapiod_req_id"] = req_id
+        data.setdefault("metadata", {})["_tapiod_req_id"] = trace_id
         return data
 
     async def async_post_call_success_hook(self, data, user_api_key_dict, response):
@@ -958,16 +981,87 @@ class GatewayHooks(CustomLogger):
 
         asyncio.create_task(_write_cache())
         asyncio.create_task(_write_memory())
+
+        # ── Write to DB from here (ctx is guaranteed non-None) ──────────────
+        # async_log_success_event runs in LiteLLM internals and loses ctx
+        # because the metadata injected by the pre_call hook doesn't survive
+        # into that callback's kwargs. Post-call hook has data["metadata"] intact.
+        usage = {}
+        if isinstance(response, dict):
+            usage = response.get("usage") or {}
+        elif hasattr(response, "usage") and response.usage:
+            usage = response.usage
+        prompt_tokens = (getattr(usage, "prompt_tokens", None)
+                         or (usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0))
+        completion_tokens = (getattr(usage, "completion_tokens", None)
+                             or (usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0))
+
+        cache_hit    = ctx.cache_hit
+        cache_source = ctx.cache_source or ""
+        cache_saved  = ctx.cache_saved_usd or 0.0
+        routing_saved = ctx.routing_saved_usd or 0.0
+        total_saved  = ctx.total_saved_usd or 0.0
+        mem_tokens   = ctx.memory_tokens_saved or 0
+        provider_model = ctx.provider_model or "unknown"
+
+        if cache_hit:
+            prompt_tokens = 0
+            completion_tokens = 0
+
+        async def _write_db():
+            try:
+                actual_cost = 0.0
+                if not cache_hit and prompt_tokens + completion_tokens > 0:
+                    try:
+                        from litellm import cost_per_token as _cpt
+                        _MODEL_MAP = {
+                            "fast-groq": "groq/llama-3.1-8b-instant",
+                            "heavy-groq": "groq/llama-3.3-70b-versatile",
+                            "fast-openai": "openai/gpt-4o-mini",
+                            "heavy-openai": "openai/gpt-4o",
+                            "fast-anthropic": "anthropic/claude-sonnet-4-6",
+                            "heavy-anthropic": "anthropic/claude-opus-4-8",
+                        }
+                        m = _MODEL_MAP.get(provider_model, "groq/llama-3.1-8b-instant")
+                        c_in, c_out = _cpt(model=m, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+                        actual_cost = (c_in or 0.0) + (c_out or 0.0)
+                    except Exception:
+                        pass
+
+                conn = await asyncpg.connect(DB_DSN)
+                await conn.execute(
+                    '''INSERT INTO requests_log
+                       (timestamp, tenant_id, user_id, latency, model, provider,
+                        tokens, prompt_tokens, completion_tokens, cost, actual_cost_usd,
+                        cache_hit, cache_source, cache_saved_usd, routing_saved_usd,
+                        memory_tokens_saved, total_saved_usd, blocked, pipeline_trace)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)''',
+                    datetime.now(), ctx.tenant_id, ctx.user_id,
+                    0.0, provider_model,
+                    provider_model.split("-")[1] if "-" in provider_model else "groq",
+                    prompt_tokens + completion_tokens, prompt_tokens, completion_tokens,
+                    actual_cost, actual_cost,
+                    cache_hit, cache_source, cache_saved, routing_saved,
+                    mem_tokens, total_saved, False,
+                    json.dumps(ctx.pipeline_trace),
+                )
+                await conn.close()
+            except Exception as e:
+                print(f"DB log error (post_call): {e}")
+
+        asyncio.create_task(_write_db())
         return response
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        latency = (end_time.timestamp() - start_time.timestamp()
-                   if hasattr(start_time, "timestamp")
-                   else float(end_time - start_time))
-
-        actual_cost = kwargs.get("response_cost", 0.0) or 0.0
-        req_id = (kwargs.get("metadata") or {}).get("_tapiod_req_id")
+        # DB write is now done in async_post_call_success_hook where ctx is
+        # always available.  This handler only handles actual_cost back-fill
+        # for non-cached requests (response_cost from LiteLLM's pricing).
+        meta = kwargs.get("metadata") or {}
+        req_id = meta.get("_tapiod_trace_id") or meta.get("_tapiod_req_id")
         ctx: Optional[RequestContext] = _pop_ctx(req_id) if req_id else None
+        if ctx is not None:
+            ctx.actual_cost_usd = kwargs.get("response_cost", 0.0) or 0.0
+        return  # DB already written in post_call hook
 
         usage = getattr(response_obj, "usage", None) or {}
         if isinstance(response_obj, dict):
@@ -1010,14 +1104,14 @@ class GatewayHooks(CustomLogger):
             await conn.execute(
                 '''INSERT INTO requests_log
                    (timestamp, tenant_id, user_id, latency, model, provider,
-                    prompt_tokens, completion_tokens, cost, actual_cost_usd,
+                    tokens, prompt_tokens, completion_tokens, cost, actual_cost_usd,
                     cache_hit, cache_source, cache_saved_usd, routing_saved_usd,
                     memory_tokens_saved, total_saved_usd, blocked, pipeline_trace)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)''',
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)''',
                 datetime.now(), ctx.tenant_id if ctx else "unknown",
                 ctx.user_id if ctx else "unknown",
                 latency, provider_model, provider_model.split("-")[1] if "-" in provider_model else "groq",
-                prompt_tokens, completion_tokens, actual_cost, actual_cost,
+                prompt_tokens + completion_tokens, prompt_tokens, completion_tokens, actual_cost, actual_cost,
                 cache_hit, cache_source, cache_saved, routing_saved,
                 mem_tokens, total_saved, False, pipeline_trace,
             )

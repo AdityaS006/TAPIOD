@@ -3,7 +3,17 @@
   "cache_similarity_threshold": 0.85,
   "cache_ttl_seconds": 3600,
   "tiers": {
-    "fast": ["fast-groq", "fast-openai", "fast-anthropic"],
-    "heavy": ["heavy-anthropic", "heavy-openai", "heavy-groq"]
+    "fast": [
+      "fast-groq",
+      "fast-gemini",
+      "fast-openai",
+      "fast-anthropic"
+    ],
+    "heavy": [
+      "heavy-openai",
+      "heavy-groq",
+      "heavy-gemini",
+      "heavy-anthropic"
+    ]
   }
 }
