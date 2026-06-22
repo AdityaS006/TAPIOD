@@ -2,6 +2,10 @@ litellm_settings:
   cache: false
   callbacks:
     - hooks.proxy_hooks
+  success_callback:
+    - langfuse
+  failure_callback:
+    - langfuse
 
 model_list:
   # Fast tier

@@ -17,3 +17,4 @@ pytest-asyncio
 cryptography
 tabulate
 anthropic
+langfuse>=2.6.0,<3.0
