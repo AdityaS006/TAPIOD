@@ -98,6 +98,6 @@ resp.trace.provider_model    # actual model used (e.g. "groq/llama-3.1-8b-instan
 | `fast-anthropic` | claude-sonnet-4-6 | Anthropic fast tier |
 | `heavy-anthropic` | claude-opus-4-8 | Anthropic heavy tier |
 | `fast-gemini` | gemini-3.5-flash | Google fast tier |
-| `heavy-gemini` | gemini-3.1-pro | Google heavy tier |
+| `heavy-gemini` | gemini-3.1-pro-preview | Google heavy tier |
 
 TAPIOD's router may override your model choice if semantic cache or RouteLLM routing redirects the request.
