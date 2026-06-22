@@ -12,7 +12,7 @@ TAPIOD sits between your app and any LLM provider and quietly makes every reques
 
 ```bash
 # 1. Clone and add your key
-git clone https://github.com/YOUR_ORG/TAPIOD.git && cd TAPIOD
+git clone https://github.com/StatusNeo/TAPIOD.git && cd TAPIOD
 cp gateway/.env.example gateway/.env          # then edit: GROQ_API_KEY=gsk_...
 
 # 2. Start infrastructure (Qdrant + PostgreSQL + Redis)
