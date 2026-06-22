@@ -1,8 +1,0 @@
-Metadata-Version: 2.4
-Name: tapiod
-Version: 0.1.0
-Summary: Lightweight client for the TAPIOD LLM gateway — caching, smart routing, memory and observability out of the box
-License: MIT
-Requires-Python: >=3.10
-Description-Content-Type: text/markdown
-Requires-Dist: httpx>=0.27
