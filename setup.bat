@@ -26,6 +26,17 @@ if not exist "%ROOT%gateway\.env" (
     pause
 )
 
+:: ── FERNET_SECRET ────────────────────────────────────────────────────────────
+findstr /b "FERNET_SECRET=" "%ROOT%gateway\.env" > nul 2>&1
+if errorlevel 1 (
+    for /f %%k in ('python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2^>nul') do (
+        echo FERNET_SECRET=%%k >> "%ROOT%gateway\.env"
+        echo   [OK] FERNET_SECRET generated and added to gateway\.env
+    )
+) else (
+    echo   [OK] FERNET_SECRET already set
+)
+
 :: ── Step 1: Docker ──────────────────────────────────────────────────────────
 echo   [1/5] Starting infrastructure  ^(Qdrant · PostgreSQL · Redis^)
 docker compose -f "%ROOT%docker-compose.yml" up -d

@@ -35,6 +35,19 @@ if [ ! -f "$GATEWAY/.env" ]; then
     read -rp "  Press Enter once you've added your key... "
 fi
 
+# ── FERNET_SECRET ─────────────────────────────────────────────────────────────
+if ! grep -q "^FERNET_SECRET=" "$GATEWAY/.env" 2>/dev/null; then
+    FERNET_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null)
+    if [ -n "$FERNET_KEY" ]; then
+        echo "FERNET_SECRET=$FERNET_KEY" >> "$GATEWAY/.env"
+        ok "FERNET_SECRET generated and added to gateway/.env"
+    else
+        warn "Could not generate FERNET_SECRET — install cryptography: pip install cryptography"
+    fi
+else
+    ok "FERNET_SECRET already set"
+fi
+
 # ── Step 1: Docker infrastructure ────────────────────────────────────────────
 step 1 "Starting infrastructure  (Qdrant · PostgreSQL · Redis)"
 docker compose -f "$ROOT/docker-compose.yml" up -d

@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field
 
 
@@ -8,6 +9,8 @@ class RequestContext:
     tenant_id: str
     user_id: str
     vec: list
+
+    req_start: float = field(default_factory=time.perf_counter)
 
     cache_hit: bool = False
     cache_source: str = ""

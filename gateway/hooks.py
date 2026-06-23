@@ -10,6 +10,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+# Load .env before anything reads os.environ (e.g. FERNET_SECRET, API keys)
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent / ".env", override=False)
+
 import asyncpg
 import httpx
 import redis as redis_lib
@@ -30,11 +34,14 @@ except Exception:
 
 # Map internal model aliases to names headroom knows for token counting
 _HEADROOM_MODEL_MAP = {
-    "fast-groq": "gpt-4o-mini",
-    "heavy-groq": "gpt-4o",
-    "fast-openai": "gpt-4o-mini",
-    "heavy-openai": "gpt-4o",
+    "fast-groq":       "gpt-4o-mini",
+    "heavy-groq":      "gpt-4o",
+    "fast-openai":     "gpt-4o-mini",
+    "heavy-openai":    "gpt-4o",
+    "fast-anthropic":  "gpt-4o-mini",            # no headroom Haiku support; gpt-4o-mini is similar size
     "heavy-anthropic": "claude-opus-4-20250514",
+    "fast-gemini":     "gpt-4o-mini",            # no headroom Gemini support
+    "heavy-gemini":    "gpt-4o",
 }
 
 from context import RequestContext
@@ -44,7 +51,9 @@ from router import routellm_classify, knn_classify, pick_provider, get_available
 from cost import estimate_cache_save, estimate_memory_tokens_saved, seconds_to_ms
 from tool_executor import execute_tool
 
-DB_DSN = "postgresql://litellm:litellm_password@localhost:5432/litellm_logs"
+DB_DSN            = os.getenv("DATABASE_URL",      "postgresql://litellm:litellm_password@localhost:5432/litellm_logs")
+QDRANT_URL        = os.getenv("QDRANT_URL",        "http://localhost:6333")
+LITELLM_PROXY_URL = os.getenv("LITELLM_PROXY_URL", "http://localhost:4000")
 LAST_TOOLS_PATH = Path(__file__).parent / "last_tools.json"
 
 qdrant: Optional[QdrantClient] = None
@@ -65,7 +74,7 @@ def init_qdrant():
     global qdrant, embedding_model
     try:
         print("Initializing Qdrant + FastEmbed...")
-        qdrant = QdrantClient(url="http://localhost:6333")
+        qdrant = QdrantClient(url=QDRANT_URL)
         embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 
         for collection, size in [
@@ -192,6 +201,7 @@ async def init_db():
                 latency FLOAT NOT NULL,
                 model VARCHAR(255) NOT NULL,
                 provider VARCHAR(50),
+                tokens INT DEFAULT 0,
                 prompt_tokens INT DEFAULT 0,
                 completion_tokens INT DEFAULT 0,
                 cost FLOAT DEFAULT 0.0,
@@ -205,6 +215,7 @@ async def init_db():
                 blocked BOOLEAN DEFAULT FALSE,
                 pipeline_trace JSONB
             );
+            ALTER TABLE requests_log ADD COLUMN IF NOT EXISTS tokens INT DEFAULT 0;
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id VARCHAR(255) PRIMARY KEY,
                 tenant_id VARCHAR(255) NOT NULL,
@@ -238,7 +249,7 @@ async def _run_agent_loop(payload: dict, trace_id: str) -> dict:
     enriched.pop("stream", None)
 
     async with httpx.AsyncClient() as client:
-        res1 = await client.post("http://localhost:4000/v1/chat/completions", json=enriched, timeout=60.0)
+        res1 = await client.post(f"{LITELLM_PROXY_URL}/v1/chat/completions", json=enriched, timeout=60.0)
         if res1.status_code != 200:
             print(f"[AgentLoop] LiteLLM returned {res1.status_code}: {res1.text[:300]}")
             try:
@@ -270,7 +281,7 @@ async def _run_agent_loop(payload: dict, trace_id: str) -> dict:
             new_payload.setdefault("metadata", {})["_tapiod_trace_id"] = trace_id
             new_payload.pop("stream", None)
             print(f"[AgentLoop] Sending Follow-Up Request to LLM with actual tool data...")
-            res2 = await client.post("http://localhost:4000/v1/chat/completions", json=new_payload, timeout=60.0)
+            res2 = await client.post(f"{LITELLM_PROXY_URL}/v1/chat/completions", json=new_payload, timeout=60.0)
             if res2.status_code != 200:
                 print(f"[AgentLoop] Follow-up returned {res2.status_code}: {res2.text[:300]}")
                 try:
@@ -578,71 +589,6 @@ def get_config():
 
     return {"models": models, "providers": providers, "routing_status": services_status.get("qdrant_ready", False)}
 
-class ProviderReq(BaseModel):
-    name: str
-    apiKey: str
-
-@app.post("/api/config/provider")
-def add_provider(req: ProviderReq):
-    env_name = req.name.upper() + "_API_KEY"
-    os.environ[env_name] = req.apiKey
-
-    try:
-        with open(".env", "r") as f:
-            lines = f.readlines()
-    except FileNotFoundError:
-        lines = []
-
-    found = False
-    with open(".env", "w") as f:
-        for line in lines:
-            if line.startswith(f"{env_name}="):
-                f.write(f"{env_name}={req.apiKey}\n")
-                found = True
-            else:
-                f.write(line)
-        if not found:
-            f.write(f"\n{env_name}={req.apiKey}\n")
-
-    return {"status": "success"}
-
-@app.get("/api/config/verify/{name}")
-def verify_provider(name: str):
-    env_name = name.upper() + "_API_KEY"
-    key = os.environ.get(env_name)
-
-    if not key:
-        try:
-            with open(".env", "r") as f:
-                for line in f.readlines():
-                    if line.startswith(f"{env_name}="):
-                        key = line.split("=")[1].strip()
-        except FileNotFoundError:
-            pass
-
-    if not key:
-        return {"status": "error", "message": "Key not found"}
-    if len(key) < 10:
-        return {"status": "error", "message": "Key format invalid"}
-    return {"status": "success"}
-
-@app.delete("/api/config/provider/{name}")
-def delete_provider(name: str):
-    env_name = name.upper() + "_API_KEY"
-    if env_name in os.environ:
-        del os.environ[env_name]
-
-    try:
-        with open(".env", "r") as f:
-            lines = f.readlines()
-        with open(".env", "w") as f:
-            for line in lines:
-                if not line.startswith(f"{env_name}="):
-                    f.write(line)
-    except FileNotFoundError:
-        pass
-
-    return {"status": "success"}
 
 class ModelReq(BaseModel):
     alias: str
@@ -716,6 +662,60 @@ async def list_provider_keys():
     ]
 
 
+_ENV_FILE = Path(__file__).parent / ".env"
+
+
+def _write_to_env_file(env_name: str, value: str) -> None:
+    try:
+        lines = _ENV_FILE.read_text().splitlines(keepends=True) if _ENV_FILE.exists() else []
+    except OSError:
+        lines = []
+    found = False
+    new_lines = []
+    for line in lines:
+        if line.startswith(f"{env_name}="):
+            new_lines.append(f"{env_name}={value}\n")
+            found = True
+        else:
+            new_lines.append(line)
+    if not found:
+        new_lines.append(f"{env_name}={value}\n")
+    _ENV_FILE.write_text("".join(new_lines))
+
+
+def _remove_from_env_file(env_name: str) -> None:
+    if not _ENV_FILE.exists():
+        return
+    lines = _ENV_FILE.read_text().splitlines(keepends=True)
+    _ENV_FILE.write_text("".join(l for l in lines if not l.startswith(f"{env_name}=")))
+
+
+async def _reload_litellm() -> None:
+    """Restart the LiteLLM proxy process so it re-reads .env with the new key."""
+    import signal as _signal
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "litellm.*--config"],
+            capture_output=True, text=True,
+        )
+        pids = [int(p) for p in result.stdout.split() if p.strip()]
+        for pid in pids:
+            os.kill(pid, _signal.SIGTERM)
+        await asyncio.sleep(2.0)
+        gateway_dir = str(Path(__file__).parent)
+        litellm_bin = str(Path(__file__).parent / "venv" / "bin" / "litellm")
+        config_path = str(Path(__file__).parent / "litellm_config.yaml")
+        subprocess.Popen(
+            [litellm_bin, "--config", config_path, "--port", "4000"],
+            stdout=open("/tmp/litellm.log", "a"),
+            stderr=subprocess.STDOUT,
+            cwd=gateway_dir,
+        )
+    except Exception as e:
+        print(f"[reload_litellm] {e}")
+
+
 @app.post("/api/config/keys")
 async def save_provider_key(req: ProviderKeyRequest):
     from crypto import encrypt_key
@@ -731,6 +731,8 @@ async def save_provider_key(req: ProviderKeyRequest):
     env_var = PROVIDER_ENV_MAP.get(req.provider)
     if env_var:
         os.environ[env_var] = req.key
+        _write_to_env_file(env_var, req.key)
+    asyncio.create_task(_reload_litellm())
     return {"status": "ok"}
 
 
@@ -743,8 +745,11 @@ async def delete_provider_key(provider: str):
     )
     await conn.close()
     env_var = PROVIDER_ENV_MAP.get(provider)
-    if env_var and env_var in os.environ:
-        del os.environ[env_var]
+    if env_var:
+        if env_var in os.environ:
+            del os.environ[env_var]
+        _remove_from_env_file(env_var)
+    asyncio.create_task(_reload_litellm())
     return {"status": "ok"}
 
 
@@ -802,10 +807,35 @@ class GatewayHooks(CustomLogger):
 
         bypass_cache = data.get("metadata", {}).get("bypass_cache", False)
 
+        async def _write_cache_hit_trace(ctx: RequestContext):
+            """Write trace to Postgres for cache hits.
+            post_call_success_hook never fires for mock_response returns, so we write here."""
+            ctx.compute_total_saved()
+            latency = time.perf_counter() - ctx.req_start
+            try:
+                conn = await asyncpg.connect(DB_DSN)
+                await conn.execute(
+                    '''INSERT INTO requests_log
+                       (timestamp, tenant_id, user_id, latency, model, provider,
+                        tokens, prompt_tokens, completion_tokens, cost, actual_cost_usd,
+                        cache_hit, cache_source, cache_saved_usd, routing_saved_usd,
+                        memory_tokens_saved, total_saved_usd, blocked, pipeline_trace)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)''',
+                    datetime.now(), ctx.tenant_id, ctx.user_id,
+                    latency, "cached", ctx.cache_source,
+                    0, 0, 0, 0.0, 0.0,
+                    True, ctx.cache_source, ctx.cache_saved_usd, 0.0,
+                    0, ctx.total_saved_usd, False,
+                    json.dumps(ctx.pipeline_trace),
+                )
+                await conn.close()
+            except Exception as e:
+                print(f"DB log error (cache hit): {e}")
+
         # --- L1: Redis exact cache ---
         if not bypass_cache and services_status["redis_ready"] and redis_client:
             t0 = time.perf_counter()
-            cached = redis_get(redis_client, tenant_id, model, messages)
+            cached = redis_get(redis_client, tenant_id, messages)
             redis_ms = seconds_to_ms(time.perf_counter() - t0)
             if cached:
                 ctx.cache_hit = True
@@ -815,7 +845,7 @@ class GatewayHooks(CustomLogger):
                     baseline_model=get_costliest_available_model(get_available_providers()),
                 )
                 ctx.record("redis_cache", "HIT", redis_ms)
-                _store_ctx(trace_id, ctx)
+                asyncio.create_task(_write_cache_hit_trace(ctx))
                 data["mock_response"] = json.loads(cached)
                 data.setdefault("metadata", {})["_tapiod_req_id"] = trace_id
                 data["tenant_id"] = tenant_id
@@ -840,8 +870,8 @@ class GatewayHooks(CustomLogger):
                 mock = {"choices": [{"message": {"role": "assistant", "content": cached_text}}],
                         "model": "cached", "usage": {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}}
                 if services_status["redis_ready"] and redis_client:
-                    redis_set(redis_client, tenant_id, model, messages, json.dumps(mock))
-                _store_ctx(trace_id, ctx)
+                    redis_set(redis_client, tenant_id, messages, json.dumps(mock))
+                asyncio.create_task(_write_cache_hit_trace(ctx))
                 data["mock_response"] = mock
                 data.setdefault("metadata", {})["_tapiod_req_id"] = trace_id
                 data["tenant_id"] = tenant_id
@@ -966,15 +996,14 @@ class GatewayHooks(CustomLogger):
                 if services_status["redis_ready"] and redis_client:
                     mock = {"choices": [{"message": {"role": "assistant", "content": response_text}}],
                             "model": "cached", "usage": {"total_tokens": 0}}
-                    redis_set(redis_client, ctx.tenant_id, ctx.provider_model,
-                              ctx.messages, json.dumps(mock))
+                    redis_set(redis_client, ctx.tenant_id, ctx.messages, json.dumps(mock))
 
         async def _write_memory():
             if not ctx.cache_hit and response_text:
                 async def call_llm(messages, model="fast-groq"):
                     async with httpx.AsyncClient() as client:
                         r = await client.post(
-                            "http://localhost:4000/v1/chat/completions",
+                            f"{LITELLM_PROXY_URL}/v1/chat/completions",
                             json={"model": model, "messages": messages, "max_tokens": 100},
                             timeout=10.0,
                         )
@@ -1013,20 +1042,15 @@ class GatewayHooks(CustomLogger):
             prompt_tokens = 0
             completion_tokens = 0
 
+        latency = time.perf_counter() - ctx.req_start
+
         async def _write_db():
             try:
                 actual_cost = 0.0
                 if not cache_hit and prompt_tokens + completion_tokens > 0:
                     try:
                         from litellm import cost_per_token as _cpt
-                        _MODEL_MAP = {
-                            "fast-groq": "groq/llama-3.1-8b-instant",
-                            "heavy-groq": "groq/llama-3.3-70b-versatile",
-                            "fast-openai": "openai/gpt-4o-mini",
-                            "heavy-openai": "openai/gpt-4o",
-                            "fast-anthropic": "anthropic/claude-sonnet-4-6",
-                            "heavy-anthropic": "anthropic/claude-opus-4-8",
-                        }
+                        from router import MODEL_MAP as _MODEL_MAP
                         m = _MODEL_MAP.get(provider_model, "groq/llama-3.1-8b-instant")
                         c_in, c_out = _cpt(model=m, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
                         actual_cost = (c_in or 0.0) + (c_out or 0.0)
@@ -1042,7 +1066,7 @@ class GatewayHooks(CustomLogger):
                         memory_tokens_saved, total_saved_usd, blocked, pipeline_trace)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)''',
                     datetime.now(), ctx.tenant_id, ctx.user_id,
-                    0.0, provider_model,
+                    latency, provider_model,
                     provider_model.split("-")[1] if "-" in provider_model else "groq",
                     prompt_tokens + completion_tokens, prompt_tokens, completion_tokens,
                     actual_cost, actual_cost,
@@ -1058,71 +1082,13 @@ class GatewayHooks(CustomLogger):
         return response
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        # DB write is now done in async_post_call_success_hook where ctx is
-        # always available.  This handler only handles actual_cost back-fill
-        # for non-cached requests (response_cost from LiteLLM's pricing).
+        # DB write happens in async_post_call_success_hook where ctx is always available.
+        # This handler only back-fills response_cost from LiteLLM's built-in pricing.
         meta = kwargs.get("metadata") or {}
         req_id = meta.get("_tapiod_trace_id") or meta.get("_tapiod_req_id")
-        ctx: Optional[RequestContext] = _pop_ctx(req_id) if req_id else None
+        ctx: Optional[RequestContext] = _ctx_store.get(req_id) if req_id else None
         if ctx is not None:
             ctx.actual_cost_usd = kwargs.get("response_cost", 0.0) or 0.0
-        return  # DB already written in post_call hook
-
-        usage = getattr(response_obj, "usage", None) or {}
-        if isinstance(response_obj, dict):
-            usage = response_obj.get("usage", {})
-        prompt_tokens = getattr(usage, "prompt_tokens", None) or (usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0)
-        completion_tokens = getattr(usage, "completion_tokens", None) or (usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0)
-
-        cache_hit = bool(ctx and ctx.cache_hit)
-        cache_source = (ctx.cache_source if ctx else "") or ""
-        cache_saved = (ctx.cache_saved_usd if ctx else 0.0) or 0.0
-        routing_saved = (ctx.routing_saved_usd if ctx else 0.0) or 0.0
-        mem_tokens = (ctx.memory_tokens_saved if ctx else 0) or 0
-        provider_model = (ctx.provider_model if ctx else "") or kwargs.get("model", "unknown")
-        total_saved = cache_saved + routing_saved
-        pipeline_trace_list = ctx.pipeline_trace if ctx else []
-        pipeline_trace = json.dumps(pipeline_trace_list)
-
-        if cache_hit:
-            actual_cost = 0.0
-            prompt_tokens = 0
-            completion_tokens = 0
-
-        # Write pipeline trace to Redis side-channel for the agent endpoint to pick up
-        trace_redis_id = getattr(ctx, "_trace_id", "") if ctx else ""
-        if trace_redis_id and redis_client and services_status["redis_ready"]:
-            try:
-                ctx.actual_cost_usd = actual_cost
-                ctx.compute_total_saved()
-                trace_payload = ctx.to_trace_dict()
-                redis_client.setex(
-                    f"tapiod:trace:{trace_redis_id}",
-                    10,
-                    json.dumps(trace_payload),
-                )
-            except Exception:
-                pass
-
-        try:
-            conn = await asyncpg.connect(DB_DSN)
-            await conn.execute(
-                '''INSERT INTO requests_log
-                   (timestamp, tenant_id, user_id, latency, model, provider,
-                    tokens, prompt_tokens, completion_tokens, cost, actual_cost_usd,
-                    cache_hit, cache_source, cache_saved_usd, routing_saved_usd,
-                    memory_tokens_saved, total_saved_usd, blocked, pipeline_trace)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)''',
-                datetime.now(), ctx.tenant_id if ctx else "unknown",
-                ctx.user_id if ctx else "unknown",
-                latency, provider_model, provider_model.split("-")[1] if "-" in provider_model else "groq",
-                prompt_tokens + completion_tokens, prompt_tokens, completion_tokens, actual_cost, actual_cost,
-                cache_hit, cache_source, cache_saved, routing_saved,
-                mem_tokens, total_saved, False, pipeline_trace,
-            )
-            await conn.close()
-        except Exception as e:
-            print(f"DB log error: {e}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:

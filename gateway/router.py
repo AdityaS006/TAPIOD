@@ -16,11 +16,11 @@ PROVIDER_COST_RANK = {
 
 MODEL_MAP = {
     "fast-groq":       "groq/llama-3.1-8b-instant",
-    "fast-gemini":     "gemini/gemini-3.1-flash",
+    "fast-gemini":     "gemini/gemini-3.5-flash",
     "fast-openai":     "openai/gpt-4o-mini",
     "fast-anthropic":  "anthropic/claude-sonnet-4-6",
     "heavy-groq":      "groq/llama-3.3-70b-versatile",
-    "heavy-gemini":    "gemini/gemini-3.1-pro",
+    "heavy-gemini":    "gemini/gemini-3.1-pro-preview",
     "heavy-openai":    "openai/gpt-4o",
     "heavy-anthropic": "anthropic/claude-opus-4-8",
 }
@@ -88,22 +88,23 @@ def _get_routellm():
 
 def routellm_classify(prompt: str, qdrant=None, vec: list | None = None) -> float:
     """
-    Primary routing classifier using RouteLLM's Matrix Factorization router.
-    Trained on 50k+ Chatbot-Arena preference pairs — knows when Opus is really needed.
-    Returns 0.0 (fast tier) or 1.0 (heavy tier).
-    Falls back to KNN (Qdrant) if RouteLLM is unavailable.
+    Routes using KNN when an embedding vector is available (always preferred —
+    it's local, free, and returns a nuanced 0.0–1.0 score).
+    RouteLLM MF is only tried when no vec is provided, because it calls the
+    OpenAI Embeddings API which adds ~1.5 s of latency per request.
     """
+    if vec is not None and qdrant is not None:
+        return knn_classify(qdrant, vec)
+
     controller = _get_routellm()
     if controller is not None:
         try:
             result = controller.route(prompt, "mf", threshold=MF_THRESHOLD)
-            # result is the model name: "gpt-4o" → heavy, "gpt-4o-mini" → fast
             score = 1.0 if result == "gpt-4o" else 0.0
             return score
         except Exception as e:
             print(f"[Router] RouteLLM route() failed ({e}), falling back to KNN")
 
-    # KNN fallback
     return knn_classify(qdrant, vec)
 
 

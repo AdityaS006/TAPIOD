@@ -32,8 +32,8 @@ export default function Observability() {
     const fetchAll = async () => {
       try {
         const [rRes, sRes] = await Promise.all([
-          fetch(`http://localhost:4001/api/routing-stats?time_range=${timeRange}`),
-          fetch(`http://localhost:4001/api/savings?time_range=${timeRange}`),
+          fetch(`/api/routing-stats?time_range=${timeRange}`),
+          fetch(`/api/savings?time_range=${timeRange}`),
         ]);
         if (rRes.ok) setStats(await rRes.json());
         if (sRes.ok) setSavings(await sRes.json());

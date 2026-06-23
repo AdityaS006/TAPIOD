@@ -6,26 +6,26 @@ from typing import Optional
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 
-def redis_cache_key(tenant_id: str, model: str, messages: list) -> str:
+def redis_cache_key(tenant_id: str, messages: list) -> str:
     payload = json.dumps(
-        {"tenant_id": tenant_id, "model": model, "messages": messages},
+        {"tenant_id": tenant_id, "messages": messages},
         sort_keys=True,
     )
     return f"tapiod:cache:{hashlib.sha256(payload.encode()).hexdigest()}"
 
 
-def redis_get(redis_client, tenant_id: str, model: str, messages: list) -> Optional[str]:
+def redis_get(redis_client, tenant_id: str, messages: list) -> Optional[str]:
     try:
-        key = redis_cache_key(tenant_id, model, messages)
+        key = redis_cache_key(tenant_id, messages)
         return redis_client.get(key)
     except Exception:
         return None
 
 
-def redis_set(redis_client, tenant_id: str, model: str, messages: list,
+def redis_set(redis_client, tenant_id: str, messages: list,
               response_json: str, ttl: int = 3600):
     try:
-        key = redis_cache_key(tenant_id, model, messages)
+        key = redis_cache_key(tenant_id, messages)
         redis_client.setex(key, ttl, response_json)
     except Exception:
         pass
