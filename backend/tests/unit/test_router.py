@@ -29,7 +29,11 @@ def test_knn_classify_defaults_on_error():
     score = knn_classify(qdrant, [0.1] * 384)
     assert score == 0.5
 
-def test_pick_provider_selects_cheapest_fast():
+def test_pick_provider_selects_cheapest_fast(monkeypatch):
+    """With an empty priority list, falls back to cost-rank ordering (groq is cheapest fast)."""
+    def mock_config():
+        return {"complexity_threshold": 0.5, "tiers": {"fast": [], "heavy": []}}
+    monkeypatch.setattr("router.load_routing_config", mock_config)
     available = ["fast-groq", "fast-openai", "heavy-groq"]
     provider = pick_provider(available, complexity_score=0.2)
     assert provider == "fast-groq"

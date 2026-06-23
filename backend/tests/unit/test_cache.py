@@ -5,26 +5,26 @@ from unittest.mock import MagicMock, patch
 from cache import redis_cache_key, redis_get, redis_set, qdrant_cache_get
 
 def test_redis_key_is_deterministic():
-    key1 = redis_cache_key("t1", "fast-groq", [{"role": "user", "content": "hi"}])
-    key2 = redis_cache_key("t1", "fast-groq", [{"role": "user", "content": "hi"}])
+    key1 = redis_cache_key("t1", [{"role": "user", "content": "hi"}])
+    key2 = redis_cache_key("t1", [{"role": "user", "content": "hi"}])
     assert key1 == key2
     assert key1.startswith("tapiod:cache:")
 
 def test_redis_key_differs_by_tenant():
-    key1 = redis_cache_key("t1", "fast-groq", [{"role": "user", "content": "hi"}])
-    key2 = redis_cache_key("t2", "fast-groq", [{"role": "user", "content": "hi"}])
+    key1 = redis_cache_key("t1", [{"role": "user", "content": "hi"}])
+    key2 = redis_cache_key("t2", [{"role": "user", "content": "hi"}])
     assert key1 != key2
 
 def test_redis_get_returns_none_on_miss():
     mock_client = MagicMock()
     mock_client.get.return_value = None
-    result = redis_get(mock_client, "t1", "fast-groq", [])
+    result = redis_get(mock_client, "t1", [])
     assert result is None
 
 def test_redis_get_returns_cached_value():
     mock_client = MagicMock()
     mock_client.get.return_value = json.dumps({"choices": [{"message": {"content": "Paris"}}]})
-    result = redis_get(mock_client, "t1", "fast-groq", [{"role": "user", "content": "capital?"}])
+    result = redis_get(mock_client, "t1", [{"role": "user", "content": "capital?"}])
     assert result is not None
     assert "Paris" in result
 
