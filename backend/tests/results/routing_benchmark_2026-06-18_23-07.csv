@@ -1,0 +1,15 @@
+num,category,prompt,routed_tier,routed_model,in_tok,out_tok,total_tok,base_model,base_cost,tapiod_cost,saved_usd,saved_pct,latency_ms,provider
+1,simple,What does CORS stand for and what does it prevent?,sonnet,claude-sonnet-4-6,92,167,259,claude-opus-4-8,0.013905,0.002781,0.011124,80.0,1735,fast-groq
+2,simple,What is the difference between == and === in JavaScript?,opus,claude-opus-4-8,92,256,348,claude-opus-4-8,0.02058,0.02058,0.0,0.0,1322,heavy-groq
+3,simple,What HTTP status code means 'resource not found'?,opus,claude-opus-4-8,91,16,107,claude-opus-4-8,0.002565,0.002565,0.0,0.0,513,heavy-groq
+4,simple,What does the SQL keyword DISTINCT do?,opus,claude-opus-4-8,89,238,327,claude-opus-4-8,0.019185,0.019185,0.0,0.0,1227,heavy-groq
+5,simple,Convert 1 gigabyte to megabytes.,opus,claude-opus-4-8,90,18,108,claude-opus-4-8,0.0027,0.0027,0.0,0.0,745,heavy-groq
+6,simple,What is a foreign key in a relational database?,opus,claude-opus-4-8,91,337,428,claude-opus-4-8,0.02664,0.02664,0.0,0.0,1352,heavy-groq
+7,medium,Explain the difference between authentication and authorization.,opus,claude-opus-4-8,90,353,443,claude-opus-4-8,0.027825,0.027825,0.0,0.0,1519,heavy-groq
+8,medium,What is memoization and when should you use it in Python?,opus,claude-opus-4-8,94,539,633,claude-opus-4-8,0.041835,0.041835,0.0,0.0,2391,heavy-groq
+9,medium,What is the purpose of an index in a database and what are the trade-offs?,opus,claude-opus-4-8,98,600,698,claude-opus-4-8,0.04647,0.04647,0.0,0.0,2292,heavy-groq
+10,complex,"We have a monolithic Django app serving 500k daily active users. Describe a step-by-step migration plan to microservices with zero downtime, covering service boundaries, data migration, traffic cutover, and rollback strategy.",opus,claude-opus-4-8,126,863,989,claude-opus-4-8,0.066615,0.066615,0.0,0.0,3823,heavy-groq
+11,complex,"Write a Python implementation of a distributed rate limiter using Redis that supports sliding window algorithm, per-user and per-IP quotas, graceful degradation under Redis failure, and Prometheus metrics export.",opus,claude-opus-4-8,118,1142,1260,claude-opus-4-8,0.08742,0.08742,0.0,0.0,3964,heavy-groq
+12,complex,"Our PostgreSQL queries are timing out on a table with 200M rows. Walk through your full diagnostic process: which queries to run, how to read EXPLAIN ANALYZE output, index strategies, and query rewrites.",opus,claude-opus-4-8,126,1097,1223,claude-opus-4-8,0.084165,0.084165,0.0,0.0,3518,heavy-groq
+13,complex,"Design a real-time notification system for a SaaS platform that needs to deliver push notifications, emails, and in-app alerts to 2M users with guaranteed delivery, deduplication, and per-user preference management.",opus,claude-opus-4-8,124,1132,1256,claude-opus-4-8,0.08676,0.08676,0.0,0.0,3566,heavy-groq
+14,complex,"Explain how you would implement multi-tenancy in a FastAPI application: cover data isolation strategies (schema-per-tenant vs row-level), middleware for tenant resolution, connection pooling, and security boundaries.",opus,claude-opus-4-8,122,1234,1356,claude-opus-4-8,0.09438,0.09438,0.0,0.0,4348,heavy-groq

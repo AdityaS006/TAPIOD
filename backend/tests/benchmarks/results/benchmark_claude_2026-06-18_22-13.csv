@@ -1,0 +1,15 @@
+num,category,prompt,base_model,base_in_tok,base_out_tok,base_total,base_cost,base_ms,tapiod_model,tapiod_in_tok,tapiod_out_tok,tapiod_total,tapiod_cost,tapiod_cache,tapiod_ms,savings_usd,savings_pct
+1,simple,What is the capital of Japan?,cached,0,0,0,0.0,368,cached,0,0,0,0.0,qdrant,160,0.0,0.0
+2,simple,Who wrote the play Hamlet?,cached,0,0,0,0.0,177,cached,0,0,0,0.0,qdrant,104,0.0,0.0
+3,simple,Convert 72 Fahrenheit to Celsius.,cached,0,0,0,0.0,83,cached,0,0,0,0.0,qdrant,176,0.0,0.0
+4,simple,What does the acronym API stand for?,cached,0,0,0,0.0,198,cached,0,0,0,0.0,qdrant,135,0.0,0.0
+5,simple,How many days are in a leap year?,cached,0,0,0,0.0,176,cached,0,0,0,0.0,qdrant,128,0.0,0.0
+6,medium,What is the difference between TCP and UDP?,cached,0,0,0,0.0,138,cached,0,0,0,0.0,qdrant,149,0.0,0.0
+7,medium,Explain what a REST API is in 3 sentences.,cached,0,0,0,0.0,136,cached,0,0,0,0.0,qdrant,123,0.0,0.0
+8,medium,What are Python list comprehensions and when should you use them?,cached,0,0,0,0.0,163,cached,0,0,0,0.0,qdrant,108,0.0,0.0
+9,medium,What does `git rebase` do and how does it differ from `git merge`?,cached,0,0,0,0.0,147,cached,0,0,0,0.0,qdrant,100,0.0,0.0
+10,complex,"Design a scalable database schema for a multi-tenant SaaS billing system with usage-based pricing, invoicing, and audit logging.",cached,0,0,0,0.0,146,cached,0,0,0,0.0,qdrant,155,0.0,0.0
+11,complex,"Explain the mathematical intuition behind attention mechanisms in transformers: cover softmax, key-query-value matrices, and why multi-head attention helps.",cached,0,0,0,0.0,134,cached,0,0,0,0.0,qdrant,138,0.0,0.0
+12,complex,Write a production-ready Python rate limiter backed by Redis that supports per-user quotas and handles burst traffic gracefully.,cached,0,0,0,0.0,166,cached,0,0,0,0.0,qdrant,108,0.0,0.0
+13,complex,Analyze the trade-offs between eventual consistency and strong consistency in distributed systems. Give concrete real-world examples for when to pick each.,cached,0,0,0,0.0,89,cached,0,0,0,0.0,qdrant,136,0.0,0.0
+14,complex,A FastAPI service randomly returns 500 errors under load. Describe your complete systematic debugging process from symptoms to root cause.,cached,0,0,0,0.0,185,cached,0,0,0,0.0,qdrant,405,0.0,0.0

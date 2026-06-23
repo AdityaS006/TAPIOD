@@ -1,0 +1,62 @@
+litellm_settings:
+  cache: false
+  callbacks:
+    - tapiod_agent.llm_service.proxy_hooks
+  success_callback:
+    - langfuse
+  failure_callback:
+    - langfuse
+
+model_list:
+  # Fast tier
+  - model_name: fast-groq
+    litellm_params:
+      model: groq/llama-3.1-8b-instant
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: fast-openai
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: fast-gemini
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: fast-anthropic
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Heavy tier
+  - model_name: heavy-groq
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: heavy-anthropic
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: heavy-gemini
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: heavy-openai
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 1
+  fallbacks:
+    - {"fast-openai": ["fast-groq"]}
+    - {"fast-anthropic": ["fast-groq"]}
+    - {"fast-gemini": ["fast-groq"]}
+    - {"heavy-openai": ["heavy-groq"]}
+    - {"heavy-anthropic": ["heavy-groq"]}
+    - {"heavy-gemini": ["heavy-groq"]}

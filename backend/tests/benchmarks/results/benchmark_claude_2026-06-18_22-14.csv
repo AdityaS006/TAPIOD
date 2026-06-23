@@ -1,0 +1,15 @@
+num,category,prompt,base_model,base_in_tok,base_out_tok,base_total,base_cost,base_ms,tapiod_model,tapiod_in_tok,tapiod_out_tok,tapiod_total,tapiod_cost,tapiod_cache,tapiod_ms,savings_usd,savings_pct
+1,simple,What is the capital of Japan?,fast-anthropic,119,8,127,0.002385,1105,cached,0,0,0,0.0,redis,46,0.002385,100.0
+2,simple,Who wrote the play Hamlet?,fast-anthropic,124,224,348,0.01866,1334,cached,0,0,0,0.0,redis,72,0.01866,100.0
+3,simple,Convert 72 Fahrenheit to Celsius.,fast-anthropic,88,76,164,0.00702,873,cached,0,0,0,0.0,redis,51,0.00702,100.0
+4,simple,What does the acronym API stand for?,fast-anthropic,89,33,122,0.00381,1083,cached,0,0,0,0.0,redis,52,0.00381,100.0
+5,simple,How many days are in a leap year?,fast-anthropic,90,35,125,0.003975,809,cached,0,0,0,0.0,redis,49,0.003975,100.0
+6,medium,What is the difference between TCP and UDP?,heavy-anthropic,90,420,510,0.03285,2126,cached,0,0,0,0.0,redis,51,0.03285,100.0
+7,medium,Explain what a REST API is in 3 sentences.,heavy-anthropic,93,122,215,0.010545,1028,cached,0,0,0,0.0,redis,47,0.010545,100.0
+8,medium,What are Python list comprehensions and when should you use them?,heavy-anthropic,94,585,679,0.045285,2042,cached,0,0,0,0.0,redis,57,0.045285,100.0
+9,medium,What does `git rebase` do and how does it differ from `git merge`?,heavy-anthropic,100,605,705,0.046875,2724,cached,0,0,0,0.0,redis,53,0.046875,100.0
+10,complex,"Design a scalable database schema for a multi-tenant SaaS billing system with usage-based pricing, invoicing, and audit logging.",heavy-anthropic,107,1189,1296,0.09078,3196,cached,0,0,0,0.0,redis,53,0.09078,100.0
+11,complex,"Explain the mathematical intuition behind attention mechanisms in transformers: cover softmax, key-query-value matrices, and why multi-head attention helps.",heavy-anthropic,107,721,828,0.05568,3502,cached,0,0,0,0.0,redis,53,0.05568,100.0
+12,complex,Write a production-ready Python rate limiter backed by Redis that supports per-user quotas and handles burst traffic gracefully.,heavy-anthropic,103,1092,1195,0.083445,4143,cached,0,0,0,0.0,redis,52,0.083445,100.0
+13,complex,Analyze the trade-offs between eventual consistency and strong consistency in distributed systems. Give concrete real-world examples for when to pick each.,heavy-anthropic,107,749,856,0.05778,3354,cached,0,0,0,0.0,redis,48,0.05778,100.0
+14,complex,A FastAPI service randomly returns 500 errors under load. Describe your complete systematic debugging process from symptoms to root cause.,heavy-anthropic,105,1116,1221,0.085275,4912,cached,0,0,0,0.0,redis,54,0.085275,100.0

@@ -1,0 +1,15 @@
+num,category,prompt,base_model,base_in_tok,base_out_tok,base_total_tok,base_cost,base_ms,tapiod_model,tapiod_in_tok,tapiod_out_tok,tapiod_total,tapiod_cost,tapiod_cache,tapiod_ms,savings_usd,savings_pct
+1,simple,What is the capital of Japan?,claude-opus-4-8,0,0,0,0.0,0,fast-anthropic,88,8,96,0.0,miss,1323,0.0,0.0
+2,simple,Who wrote the play Hamlet?,claude-opus-4-8,0,0,0,0.0,0,fast-anthropic,88,39,127,0.0,miss,703,0.0,0.0
+3,simple,Convert 72 Fahrenheit to Celsius.,claude-opus-4-8,0,0,0,0.0,0,fast-anthropic,88,86,174,0.0,miss,922,0.0,0.0
+4,simple,What does the acronym API stand for?,claude-opus-4-8,0,0,0,0.0,0,fast-anthropic,89,46,135,0.0,miss,668,0.0,0.0
+5,simple,How many days are in a leap year?,claude-opus-4-8,0,0,0,0.0,0,fast-anthropic,90,31,121,0.0,miss,907,0.0,0.0
+6,medium,What is the difference between TCP and UDP?,claude-opus-4-8,0,0,0,0.0,0,heavy-anthropic,90,371,461,0.0,miss,1661,0.0,0.0
+7,medium,Explain what a REST API is in 3 sentences.,claude-opus-4-8,0,0,0,0.0,0,heavy-anthropic,93,107,200,0.0,miss,1255,0.0,0.0
+8,medium,What are Python list comprehensions and when should you use them?,claude-opus-4-8,0,0,0,0.0,0,heavy-anthropic,94,599,693,0.0,miss,3098,0.0,0.0
+9,medium,What does `git rebase` do and how does it differ from `git merge`?,claude-opus-4-8,0,0,0,0.0,0,error,0,0,0,0.0,miss,117,0.0,0.0
+10,complex,"Design a scalable database schema for a multi-tenant SaaS billing system with usage-based pricing, invoicing, and audit logging.",claude-opus-4-8,0,0,0,0.0,0,error,0,0,0,0.0,miss,66,0.0,0.0
+11,complex,"Explain the mathematical intuition behind attention mechanisms in transformers: cover softmax, key-query-value matrices, and why multi-head attention helps.",claude-opus-4-8,0,0,0,0.0,0,heavy-anthropic,107,772,879,0.0,miss,3398,0.0,0.0
+12,complex,Write a production-ready Python rate limiter backed by Redis that supports per-user quotas and handles burst traffic gracefully.,claude-opus-4-8,0,0,0,0.0,0,error,0,0,0,0.0,miss,87,0.0,0.0
+13,complex,Analyze the trade-offs between eventual consistency and strong consistency in distributed systems. Give concrete real-world examples for when to pick each.,claude-opus-4-8,0,0,0,0.0,0,heavy-anthropic,107,700,807,0.0,miss,5815,0.0,0.0
+14,complex,A FastAPI service randomly returns 500 errors under load. Describe your complete systematic debugging process from symptoms to root cause.,claude-opus-4-8,0,0,0,0.0,0,heavy-anthropic,105,1229,1334,0.0,miss,4763,0.0,0.0

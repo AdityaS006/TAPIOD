@@ -1,0 +1,21 @@
+num,prompt,tapiod_model,cache,prompt_tokens,completion_tokens,tapiod_cost_usd,gemini_cost_usd,saved_usd,saved_pct
+1,I'm getting `TypeError: 'NoneType' object is not s,groq/llama-3.3-70b-versatile,-,111,404,0.00038465000000000005,0.0,0.0,0.0
+2,My React component throws `Cannot read properties ,groq/llama-3.3-70b-versatile,-,101,385,0.00036374,0.0,0.0,0.0
+3,What does `ECONNREFUSED 127.0.0.1:5432` mean and h,groq/llama-3.3-70b-versatile,-,108,577,0.00051955,0.0,0.0,0.0
+4,Git says `Your branch has diverged`. How do I reso,groq/llama-3.3-70b-versatile,-,100,623,0.00055117,0.0,0.0,0.0
+5,Write a Python function that implements binary sea,groq/llama-3.3-70b-versatile,-,94,532,0.00047574,0.0,0.0,0.0
+6,Write a JavaScript debounce function with TypeScri,groq/llama-3.3-70b-versatile,-,90,104,0.00013526,0.0,0.0,0.0
+7,Write a SQL query that finds the top 5 customers b,groq/llama-3.3-70b-versatile,-,103,285,0.00028592,0.0,0.0,0.0
+8,Write a Python context manager that times a block ,groq/llama-3.3-70b-versatile,-,97,328,0.00031635,0.0,0.0,0.0
+9,Here's a Python loop that should sum a list but gi,groq/llama-3.3-70b-versatile,-,124,108,0.00015848000000000001,0.0,0.0,0.0
+10,My async function returns a Promise instead of the,groq/llama-3.3-70b-versatile,-,99,483,0.00043998,0.0,0.0,0.0
+11,Why does my Docker container exit immediately afte,groq/llama-3.3-70b-versatile,-,97,531,0.00047672000000000003,0.0,0.0,0.0
+12,Review this function for improvements: `def get_us,groq/llama-3.3-70b-versatile,-,109,493,0.00045378000000000004,0.0,0.0,0.0
+13,How would you refactor a 200-line Python function ,groq/llama-3.3-70b-versatile,-,105,593,0.0005304200000000001,0.0,0.0,0.0
+14,"What's the difference between `useEffect(() => {},",groq/llama-3.3-70b-versatile,-,105,532,0.00048223,0.0,0.0,0.0
+15,Explain `git rebase -i HEAD~3` and when I should u,groq/llama-3.3-70b-versatile,-,100,598,0.0005314200000000001,0.0,0.0,0.0
+16,Write a minimal Dockerfile for a Node.js 20 Expres,groq/llama-3.3-70b-versatile,-,95,112,0.00014453,0.0,0.0,0.0
+17,Write a GitHub Actions workflow that runs pytest o,groq/llama-3.3-70b-versatile,-,94,388,0.00036198000000000003,0.0,0.0,0.0
+18,Write a NumPy-style docstring for a function that ,groq/llama-3.3-70b-versatile,-,96,287,0.00028337,0.0,0.0,0.0
+19,Explain what this regex does: `^(?=.*[A-Z])(?=.*\d,groq/llama-3.3-70b-versatile,-,115,306,0.00030959000000000005,0.0,0.0,0.0
+20,Write a one-paragraph README section explaining wh,groq/llama-3.3-70b-versatile,-,101,174,0.00019705000000000002,0.0,0.0,0.0

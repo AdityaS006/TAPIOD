@@ -1,0 +1,21 @@
+num,prompt,tapiod_model,cache,prompt_tokens,completion_tokens,tapiod_cost_usd,gemini_cost_usd,saved_usd,saved_pct
+1,I'm getting `TypeError: 'NoneType' object is not s,cached,HIT,0,0,0.0,0.0,0.0,0.0
+2,My React component throws `Cannot read properties ,cached,HIT,0,0,0.0,0.0,0.0,0.0
+3,What does `ECONNREFUSED 127.0.0.1:5432` mean and h,cached,HIT,0,0,0.0,0.0,0.0,0.0
+4,Git says `Your branch has diverged`. How do I reso,cached,HIT,0,0,0.0,0.0,0.0,0.0
+5,Write a Python function that implements binary sea,cached,HIT,0,0,0.0,0.0,0.0,0.0
+6,Write a JavaScript debounce function with TypeScri,cached,HIT,0,0,0.0,0.0,0.0,0.0
+7,Write a SQL query that finds the top 5 customers b,cached,HIT,0,0,0.0,0.0,0.0,0.0
+8,Write a Python context manager that times a block ,cached,HIT,0,0,0.0,0.0,0.0,0.0
+9,Here's a Python loop that should sum a list but gi,cached,HIT,0,0,0.0,0.0,0.0,0.0
+10,My async function returns a Promise instead of the,cached,HIT,0,0,0.0,0.0,0.0,0.0
+11,Why does my Docker container exit immediately afte,cached,HIT,0,0,0.0,0.0,0.0,0.0
+12,Review this function for improvements: `def get_us,cached,HIT,0,0,0.0,0.0,0.0,0.0
+13,How would you refactor a 200-line Python function ,cached,HIT,0,0,0.0,0.0,0.0,0.0
+14,"What's the difference between `useEffect(() => {},",cached,HIT,0,0,0.0,0.0,0.0,0.0
+15,Explain `git rebase -i HEAD~3` and when I should u,cached,HIT,0,0,0.0,0.0,0.0,0.0
+16,Write a minimal Dockerfile for a Node.js 20 Expres,cached,HIT,0,0,0.0,0.0,0.0,0.0
+17,Write a GitHub Actions workflow that runs pytest o,cached,HIT,0,0,0.0,0.0,0.0,0.0
+18,Write a NumPy-style docstring for a function that ,cached,HIT,0,0,0.0,0.0,0.0,0.0
+19,Explain what this regex does: `^(?=.*[A-Z])(?=.*\d,cached,HIT,0,0,0.0,0.0,0.0,0.0
+20,Write a one-paragraph README section explaining wh,cached,HIT,0,0,0.0,0.0,0.0,0.0

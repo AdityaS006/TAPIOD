@@ -1,0 +1,21 @@
+num,prompt,tapiod_model,cache,prompt_tokens,completion_tokens,tapiod_cost_usd,gemini_cost_usd,saved_usd,saved_pct
+1,I'm getting `TypeError: 'NoneType' object is not s,groq/llama-3.3-70b-versatile,-,111,422,0.00039887,0.00224875,0.00184988,82.26259032795998
+2,My React component throws `Cannot read properties ,groq/llama-3.3-70b-versatile,-,101,425,0.00039534,0.00225125,0.0018559100000000001,82.43908939478068
+3,What does `ECONNREFUSED 127.0.0.1:5432` mean and h,groq/llama-3.3-70b-versatile,-,108,514,0.00046978,0.002705,0.00223522,82.63290203327172
+4,Git says `Your branch has diverged`. How do I reso,groq/llama-3.3-70b-versatile,-,100,500,0.000454,0.002625,0.002171,82.70476190476191
+5,Write a Python function that implements binary sea,groq/llama-3.3-70b-versatile,-,94,575,0.00050971,0.0029925,0.00248279,82.96708437761069
+6,Write a JavaScript debounce function with TypeScri,groq/llama-3.3-70b-versatile,-,90,124,0.00015106,0.0007325,0.0005814399999999999,79.37747440273036
+7,Write a SQL query that finds the top 5 customers b,groq/llama-3.3-70b-versatile,-,103,621,0.00055136,0.00323375,0.00268239,82.94982605334364
+8,Write a Python context manager that times a block ,groq/llama-3.3-70b-versatile,-,97,394,0.00036849,0.00209125,0.0017227599999999998,82.37943813508667
+9,Here's a Python loop that should sum a list but gi,groq/llama-3.3-70b-versatile,-,124,99,0.00015137,0.00065,0.0004986299999999999,76.71230769230768
+10,My async function returns a Promise instead of the,groq/llama-3.3-70b-versatile,-,99,469,0.00042891999999999995,0.00246875,0.0020398300000000003,82.62602531645571
+11,Why does my Docker container exit immediately afte,groq/llama-3.3-70b-versatile,-,97,508,0.00045855,0.00266125,0.0022027,82.76937529356506
+12,Review this function for improvements: `def get_us,groq/llama-3.3-70b-versatile,-,109,437,0.00040954,0.00232125,0.00191171,82.3569197630587
+13,How would you refactor a 200-line Python function ,groq/llama-3.3-70b-versatile,-,105,661,0.0005841400000000001,0.00343625,0.0028521099999999997,83.00065478355765
+14,"What's the difference between `useEffect(() => {},",groq/llama-3.3-70b-versatile,-,105,528,0.00047907,0.00277125,0.00229218,82.7128552097429
+15,Explain `git rebase -i HEAD~3` and when I should u,groq/llama-3.3-70b-versatile,-,100,588,0.00052352,0.003065,0.00254148,82.91941272430668
+16,Write a minimal Dockerfile for a Node.js 20 Expres,groq/llama-3.3-70b-versatile,-,95,115,0.0001469,0.00069375,0.00054685,78.82522522522521
+17,Write a GitHub Actions workflow that runs pytest o,groq/llama-3.3-70b-versatile,-,94,412,0.00038094,0.0021775,0.0017965600000000002,82.50562571756602
+18,Write a NumPy-style docstring for a function that ,groq/llama-3.3-70b-versatile,-,96,227,0.00023597000000000003,0.001255,0.00101903,81.19760956175298
+19,Explain what this regex does: `^(?=.*[A-Z])(?=.*\d,groq/llama-3.3-70b-versatile,-,115,388,0.00037437,0.00208375,0.0017093800000000001,82.03383323335333
+20,Write a one-paragraph README section explaining wh,groq/llama-3.3-70b-versatile,-,101,143,0.00017256000000000001,0.00084125,0.00066869,79.48766716196137

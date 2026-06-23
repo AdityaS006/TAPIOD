@@ -1,0 +1,15 @@
+num,category,prompt,tapiod_model,in_tok,out_tok,total_tok,baseline_cost,tapiod_cost,savings_usd,savings_pct,cache,latency_ms
+1,simple,What is the capital of Japan?,error,0,0,0,0.0,0.0,0.0,0.0,miss,118
+2,simple,Who wrote the play Hamlet?,error,0,0,0,0.0,0.0,0.0,0.0,miss,97
+3,simple,Convert 72 Fahrenheit to Celsius.,error,0,0,0,0.0,0.0,0.0,0.0,miss,97
+4,simple,What does the acronym API stand for?,error,0,0,0,0.0,0.0,0.0,0.0,miss,70
+5,simple,How many days are in a leap year?,error,0,0,0,0.0,0.0,0.0,0.0,miss,96
+6,medium,What is the difference between TCP and UDP?,error,0,0,0,0.0,0.0,0.0,0.0,miss,91
+7,medium,Explain what a REST API is in 3 sentences.,error,0,0,0,0.0,0.0,0.0,0.0,miss,82
+8,medium,What are Python list comprehensions and when should you use them?,error,0,0,0,0.0,0.0,0.0,0.0,miss,79
+9,medium,What does `git rebase` do and how does it differ from `git merge`?,error,0,0,0,0.0,0.0,0.0,0.0,miss,78
+10,complex,"Design a scalable database schema for a multi-tenant SaaS billing system with usage-based pricing, invoicing, and audit logging.",error,0,0,0,0.0,0.0,0.0,0.0,miss,94
+11,complex,"Explain the mathematical intuition behind attention mechanisms in transformers: cover softmax, key-query-value matrices, and why multi-head attention helps.",error,0,0,0,0.0,0.0,0.0,0.0,miss,110
+12,complex,Write a production-ready Python rate limiter backed by Redis that supports per-user quotas and handles burst traffic gracefully.,error,0,0,0,0.0,0.0,0.0,0.0,miss,98
+13,complex,Analyze the trade-offs between eventual consistency and strong consistency in distributed systems. Give concrete real-world examples for when to pick each.,error,0,0,0,0.0,0.0,0.0,0.0,miss,101
+14,complex,A FastAPI service randomly returns 500 errors under load. Describe your complete systematic debugging process from symptoms to root cause.,error,0,0,0,0.0,0.0,0.0,0.0,miss,103
