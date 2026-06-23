@@ -15,16 +15,16 @@ TAPIOD sits between your app and any LLM provider and quietly makes every reques
 **Linux / macOS / WSL:**
 ```bash
 git clone https://github.com/AdityaS006/TAPIOD.git && cd TAPIOD
-cp gateway/.env.example gateway/.env   # add your GROQ_API_KEY
-chmod +x setup.sh && ./setup.sh
+cp backend/.env.example backend/.env   # add your GROQ_API_KEY
+chmod +x scripts/setup.sh && ./scripts/setup.sh
 ```
 
 **Windows:**
 ```
 git clone https://github.com/AdityaS006/TAPIOD.git
 cd TAPIOD
-copy gateway\.env.example gateway\.env   # add your GROQ_API_KEY
-setup.bat
+copy backend\.env.example backend\.env   # add your GROQ_API_KEY
+scripts\setup.bat
 ```
 
 The script handles everything: Docker infra → Python venv → pip install → Qdrant seeding → production build → launch all three services. Opens the dashboard automatically when ready.
@@ -59,11 +59,11 @@ Browser  :3000   Next.js Dashboard
                        │
 Client / SDK  ─────────┤  POST /api/agent/chat/completions
                        ▼
-              FastAPI Gateway  :4001   ← hooks.py
+              FastAPI Gateway  :4001   ← backend/main.py
                  ├─ pre-call :  exact cache → semantic cache → route → inject tools
                  ├─ forward  ─►  LiteLLM Proxy  :4000  ─►  Groq · OpenAI · Anthropic · Gemini
                  ├─ post-call:  write cache → log to PostgreSQL
-                 └─ agent loop: detect tool_calls → tool_executor.py → re-call LLM
+                 └─ agent loop: detect tool_calls → tapiod_agent/detector.py → re-call LLM
                        │
               Infrastructure (Docker)
                  ├─ Qdrant      :6333   routing_examples · tool_registry · semantic_cache_384 · user_memory
@@ -129,7 +129,7 @@ Every response includes a `_tapiod_trace`:
 ## 🐍 Python SDK
 
 ```bash
-pip install -e ./tapiod-sdk
+pip install -e ./sdk
 ```
 
 ```python
@@ -144,13 +144,13 @@ with TapiodClient() as client:
     print(f"Saved ${resp.trace.total_saved_usd:.6f}")
 ```
 
-`AsyncTapiodClient` is also available. Full SDK docs: [`tapiod-sdk/README.md`](tapiod-sdk/README.md)
+`AsyncTapiodClient` is also available. Full SDK docs: [`sdk/README.md`](sdk/README.md)
 
 ---
 
 ## 🤖 Models
 
-8 aliases across 4 providers, in **fast** and **heavy** tiers. Add only the keys you have to `gateway/.env` — any provider without a key is skipped and the gateway **falls back to Groq** automatically.
+8 aliases across 4 providers, in **fast** and **heavy** tiers. Add only the keys you have to `backend/.env` — any provider without a key is skipped and the gateway **falls back to Groq** automatically.
 
 | Alias | Model | Tier | Provider |
 |-------|-------|------|----------|
@@ -171,12 +171,12 @@ with TapiodClient() as client:
 
 | Collection | Points | Purpose | Populated by |
 |------------|--------|---------|--------------|
-| `routing_examples` | 5,000 | KNN routing — fast vs heavy | `python seed_all.py` (from `arena_prompts.json`) |
+| `routing_examples` | 5,000 | KNN routing — fast vs heavy | `python seeds/seed_all.py` (from `arena_prompts.json`) |
 | `tool_registry` | dynamic | Tool embeddings for injection | Gateway startup |
 | `semantic_cache_384` | grows | Semantic response cache | Live traffic |
 | `user_memory` | grows | Per-tenant memory facts | Live traffic |
 
-The routing brain is reproducible: **`gateway/arena_prompts.json`** (5,000 labeled prompts) ships in this repo, and `seed_all.py` rebuilds Qdrant from it after a fresh `docker compose up`.
+The routing brain is reproducible: **`backend/seeds/arena_prompts.json`** (5,000 labeled prompts) ships in this repo, and `seeds/seed_all.py` rebuilds Qdrant from it after a fresh `docker compose up`.
 
 ---
 
@@ -184,37 +184,48 @@ The routing brain is reproducible: **`gateway/arena_prompts.json`** (5,000 label
 
 ```
 TAPIOD/
-├── gateway/                   # Python backend
-│   ├── hooks.py               # FastAPI server (:4001) + all LiteLLM proxy hooks
-│   ├── tool_executor.py       # execute_tool() — TOOL_REGISTRY maps names → functions
-│   ├── tools_registry.py      # Tool definitions (OpenAI function format)
-│   ├── router.py              # KNN routing + provider/fallback selection
-│   ├── cache.py               # Redis + Qdrant cache read/write
-│   ├── memory.py              # Per-tenant user memory (Qdrant)
-│   ├── context.py             # Per-request context & system-prompt injection
-│   ├── cost.py                # Token cost + savings calculation
-│   ├── crypto.py              # Tenant ID derivation from API key (SHA-256)
-│   ├── litellm_config.yaml    # Model list, router settings, provider keys
-│   ├── arena_prompts.json     # 5,000 labeled prompts — routing training data
-│   ├── seed_all.py            # ← RUN AFTER docker compose up to populate Qdrant
+├── backend/                        # Python backend
+│   ├── main.py                     # FastAPI server (:4001) + all HTTP routes
+│   ├── tapiod_agent/
+│   │   ├── detector.py             # Tool registry, implementations, execute_tool()
+│   │   └── llm_service.py          # GatewayHooks — LiteLLM pre/post callbacks
+│   ├── router.py                   # KNN routing + provider/fallback selection
+│   ├── cache.py                    # Redis + Qdrant cache read/write
+│   ├── memory.py                   # Per-tenant user memory (Qdrant)
+│   ├── context.py                  # Per-request context & system-prompt injection
+│   ├── cost.py                     # Token cost + savings calculation
+│   ├── crypto.py                   # API key encryption (Fernet)
+│   ├── litellm_config.yaml         # Model list, router settings, provider keys
+│   ├── seeds/
+│   │   ├── arena_prompts.json      # 5,000 labeled prompts — routing training data
+│   │   └── seed_all.py             # ← RUN AFTER docker compose up to populate Qdrant
+│   ├── tests/
+│   │   ├── unit/                   # pytest unit tests (30 tests, all passing)
+│   │   └── benchmarks/             # Provider benchmark scripts + results
 │   └── requirements.txt
 │
-├── tapiod-web/                # Next.js 16 dashboard (App Router, all "use client")
+├── frontend/                       # Next.js 16 dashboard (App Router)
+│   ├── content/
+│   │   └── nav.ts                  # Centralized navigation config
 │   └── src/app/
-│       ├── page.tsx           # Live Traces — real-time request log + trace viewer
-│       ├── playground/        # Chat playground with model selector
-│       ├── observability/     # Charts: cost, cache hit rate, routing split
-│       ├── config/            # API keys, model priority, fallback config
-│       └── memory/            # Per-tenant memory viewer
+│       ├── page.tsx                # Live Traces — real-time request log + trace viewer
+│       ├── playground/             # Chat playground with model selector
+│       ├── observability/          # Charts: cost, cache hit rate, routing split
+│       ├── config/                 # API keys, model priority, fallback config
+│       └── memory/                 # Per-tenant memory viewer
 │
-├── tapiod-sdk/                # Python client SDK
+├── sdk/                            # Python client SDK
 │   └── tapiod/
-│       ├── client.py          # TapiodClient (sync) + AsyncTapiodClient
-│       └── models.py          # ChatCompletion · TapiodTrace · TraceStep
+│       ├── client.py               # TapiodClient (sync) + AsyncTapiodClient
+│       └── models.py               # ChatCompletion · TapiodTrace · TraceStep
 │
-├── docs/architecture.md       # Request-flow + cost diagrams
-├── docker-compose.yml         # Qdrant + PostgreSQL + Redis
-└── SETUP.md                   # Full local setup guide
+├── scripts/                        # Setup, start, and dev utility scripts
+│   ├── setup.sh / setup.bat        # One-command install + launch
+│   └── start.sh / start.bat        # Start all services (post-setup)
+│
+├── docs/architecture.md            # Request-flow + cost diagrams
+├── docker-compose.yml              # Qdrant + PostgreSQL + Redis
+└── SETUP.md                        # Full local setup guide
 ```
 
 ---
