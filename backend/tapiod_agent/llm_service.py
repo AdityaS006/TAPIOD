@@ -125,9 +125,13 @@ class GatewayHooks(CustomLogger):
 
         prompt = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
 
-        # --- Embed ONCE ---
+        # --- Embed ONCE (wait up to 15s for Qdrant to finish initializing on cold start) ---
         vec = []
         embed_ms = 0.0
+        if prompt and not services_status.get("qdrant_ready"):
+            deadline = time.time() + 15
+            while not services_status.get("qdrant_ready") and time.time() < deadline:
+                await asyncio.sleep(0.5)
         if qdrant is not None and embedding_model is not None and prompt:
             t0 = time.perf_counter()
             try:
@@ -151,11 +155,18 @@ class GatewayHooks(CustomLogger):
         if not vec:
             bypass_cache = True
 
-        async def _write_cache_hit_trace(ctx: RequestContext):
-            """Write trace to Postgres for cache hits.
+        async def _write_cache_hit_trace(ctx: RequestContext, redis_trace_id: str):
+            """Write trace to Postgres and Redis for cache hits.
             post_call_success_hook never fires for mock_response returns, so we write here."""
             ctx.compute_total_saved()
             latency = time.perf_counter() - ctx.req_start
+            trace_dict = ctx.to_trace_dict()
+            # Write trace to Redis side-channel so the agent endpoint can attach it to the response
+            if redis_trace_id and redis_client and services_status["redis_ready"]:
+                try:
+                    redis_client.setex(f"tapiod:trace:{redis_trace_id}", 10, json.dumps(trace_dict))
+                except Exception:
+                    pass
             try:
                 conn = await asyncpg.connect(DB_DSN)
                 await conn.execute(
@@ -189,7 +200,7 @@ class GatewayHooks(CustomLogger):
                     baseline_model=get_costliest_available_model(get_available_providers()),
                 )
                 ctx.record("redis_cache", "HIT", redis_ms)
-                asyncio.create_task(_write_cache_hit_trace(ctx))
+                asyncio.create_task(_write_cache_hit_trace(ctx, trace_id))
                 data["mock_response"] = json.loads(cached)
                 data.setdefault("metadata", {})["_tapiod_req_id"] = trace_id
                 data["tenant_id"] = tenant_id
@@ -215,7 +226,7 @@ class GatewayHooks(CustomLogger):
                         "model": "cached", "usage": {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}}
                 if services_status["redis_ready"] and redis_client:
                     redis_set(redis_client, tenant_id, messages, json.dumps(mock))
-                asyncio.create_task(_write_cache_hit_trace(ctx))
+                asyncio.create_task(_write_cache_hit_trace(ctx, trace_id))
                 data["mock_response"] = mock
                 data.setdefault("metadata", {})["_tapiod_req_id"] = trace_id
                 data["tenant_id"] = tenant_id
@@ -266,18 +277,22 @@ class GatewayHooks(CustomLogger):
                 hr_ms = seconds_to_ms(time.perf_counter() - t0)
                 ctx.record("headroom", f"skipped ({type(e).__name__})", hr_ms)
 
-        # --- Tool selection ---
+        # --- Tool selection (skipped on follow-up requests to prevent re-triggering) ---
         t0 = time.perf_counter()
-        try:
-            tool_resp = qdrant.query_points(
-                collection_name="tool_registry",
-                query=vec,
-                limit=3,
-                score_threshold=0.58,
-            )
-            tools_to_inject = [json.loads(r.payload["tool_data"]) for r in tool_resp.points]
-        except Exception:
+        bypass_tool_inject = data.get("metadata", {}).get("bypass_tool_inject", False)
+        if bypass_tool_inject:
             tools_to_inject = []
+        else:
+            try:
+                tool_resp = qdrant.query_points(
+                    collection_name="tool_registry",
+                    query=vec,
+                    limit=3,
+                    score_threshold=0.58,
+                )
+                tools_to_inject = [json.loads(r.payload["tool_data"]) for r in tool_resp.points]
+            except Exception:
+                tools_to_inject = []
         tool_ms = seconds_to_ms(time.perf_counter() - t0)
 
         if tools_to_inject:

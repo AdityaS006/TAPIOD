@@ -1,3 +1,4 @@
+import re
 import time
 import threading
 import asyncio
@@ -254,14 +255,68 @@ async def _run_agent_loop(payload: dict, trace_id: str) -> dict:
         res1 = await client.post(f"{LITELLM_PROXY_URL}/v1/chat/completions", json=enriched, timeout=60.0)
         if res1.status_code != 200:
             print(f"[AgentLoop] LiteLLM returned {res1.status_code}: {res1.text[:300]}")
+            # Groq/Llama models sometimes emit <function=NAME>{ARGS} instead of JSON tool calls.
+            # LiteLLM wraps the Groq error — parse the nested JSON to extract failed_generation.
+            failed_gen = ""
             try:
                 err = res1.json()
-                msg = err.get("error", {}).get("message", "") or err.get("detail", "") or f"Gateway error {res1.status_code}"
+                err_msg = err.get("error", {}).get("message", "")
+                # LiteLLM format: "litellm.BadRequestError: GroqException - {JSON}"
+                # err_msg can have extra fallback text after the JSON — use raw_decode
+                # so it stops at the first complete JSON object instead of greedy-matching too much.
+                groq_json_pos = err_msg.find("GroqException - {")
+                if groq_json_pos != -1:
+                    json_start = groq_json_pos + len("GroqException - ")
+                    try:
+                        groq_err, _ = json.JSONDecoder().raw_decode(err_msg, json_start)
+                        failed_gen = groq_err.get("error", {}).get("failed_generation", "")
+                    except Exception:
+                        pass
             except Exception:
-                msg = f"Gateway error {res1.status_code}"
-            return _error_response(f"[Gateway error: {msg}]")
+                pass
 
-        data1 = res1.json()
+            func_match = re.search(r"<function=(\w+)>?\s*(\{[^<>]+\})", failed_gen) if failed_gen else None
+            if func_match:
+                fn_name = func_match.group(1)
+                try:
+                    fn_args = json.loads(func_match.group(2))
+                except json.JSONDecodeError:
+                    fn_args = {}
+                print(f"[AgentLoop] Recovering from legacy <function=...> call: {fn_name}({fn_args})")
+                tool_result = execute_tool({
+                    "id": "call_legacy_0",
+                    "type": "function",
+                    "function": {"name": fn_name, "arguments": json.dumps(fn_args)},
+                })
+                messages = list(payload.get("messages", []))
+                messages.append({
+                    "role": "user",
+                    "content": f"[{fn_name} returned: {tool_result}]\n\nUsing that information, please answer my question.",
+                })
+                retry_payload = dict(payload)
+                retry_payload["messages"] = messages
+                retry_payload.setdefault("metadata", {})["_tapiod_trace_id"] = trace_id
+                retry_payload["metadata"]["bypass_tool_inject"] = True
+                retry_payload.pop("stream", None)
+                res1 = await client.post(
+                    f"{LITELLM_PROXY_URL}/v1/chat/completions", json=retry_payload, timeout=60.0
+                )
+                if res1.status_code == 200:
+                    data1 = res1.json()
+                else:
+                    return _error_response(f"[Tool retry error {res1.status_code}]")
+            else:
+                try:
+                    err = res1.json()
+                    msg = (err.get("error", {}).get("message", "")
+                           or err.get("detail", "")
+                           or f"Gateway error {res1.status_code}")
+                except Exception:
+                    msg = f"Gateway error {res1.status_code}"
+                return _error_response(f"[Gateway error: {msg}]")
+        else:
+            data1 = res1.json()
+
         message = data1.get("choices", [{}])[0].get("message", {})
 
         if "tool_calls" in message and message["tool_calls"]:
@@ -281,6 +336,7 @@ async def _run_agent_loop(payload: dict, trace_id: str) -> dict:
             new_payload = dict(payload)
             new_payload["messages"] = messages
             new_payload.setdefault("metadata", {})["_tapiod_trace_id"] = trace_id
+            new_payload["metadata"]["bypass_tool_inject"] = True
             new_payload.pop("stream", None)
             print(f"[AgentLoop] Sending Follow-Up Request to LLM with actual tool data...")
             res2 = await client.post(f"{LITELLM_PROXY_URL}/v1/chat/completions", json=new_payload, timeout=60.0)
@@ -296,11 +352,17 @@ async def _run_agent_loop(payload: dict, trace_id: str) -> dict:
 
     # Fetch pipeline trace from Redis side-channel
     if redis_client and services_status["redis_ready"]:
-        for _ in range(10):
+        for _ in range(20):
             raw = redis_client.get(f"tapiod:trace:{trace_id}")
             if raw:
                 try:
-                    data1["_tapiod_trace"] = json.loads(raw)
+                    trace = json.loads(raw)
+                    data1["_tapiod_trace"] = trace
+                    # LiteLLM overrides model field on mock_response; fix it here
+                    if trace.get("cache_source"):
+                        data1["model"] = "cached"
+                        if isinstance(data1.get("usage"), dict):
+                            data1["usage"] = {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0}
                 except Exception:
                     pass
                 redis_client.delete(f"tapiod:trace:{trace_id}")

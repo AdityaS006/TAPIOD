@@ -22,7 +22,7 @@ const SliderRow = ({
   label, configKey, min, max, step, unit, tiers, updateThreshold,
 }: {
   label: string; configKey: string; min: number; max: number; step: number; unit: string;
-  tiers: unknown; updateThreshold: (key: string, val: number) => void;
+  tiers: Record<string, number> | null; updateThreshold: (key: string, val: number) => void;
 }) => {
   const val = tiers?.[configKey] ?? (configKey === "complexity_threshold" ? 0.5 : 0.85);
   return (

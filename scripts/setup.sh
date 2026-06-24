@@ -63,8 +63,8 @@ if [ ! -d "$GATEWAY/venv" ]; then
     ok "Virtualenv created"
 fi
 source "$GATEWAY/venv/bin/activate"
-# pip install -r "$GATEWAY/requirements.txt" -q --disable-pip-version-check
-ok "Dependencies already installed"
+pip install -r "$GATEWAY/requirements.txt" -q --disable-pip-version-check
+ok "Dependencies installed"
 
 # ── Step 3: Seed Qdrant ──────────────────────────────────────────────────────
 step 3 "Seeding routing brain  (5,000 training examples)"
