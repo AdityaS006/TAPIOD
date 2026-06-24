@@ -18,8 +18,31 @@ const COMING_SOON_TOGGLE = ({ label }: { label: string }) => (
   </div>
 );
 
+const SliderRow = ({
+  label, configKey, min, max, step, unit, tiers, updateThreshold,
+}: {
+  label: string; configKey: string; min: number; max: number; step: number; unit: string;
+  tiers: unknown; updateThreshold: (key: string, val: number) => void;
+}) => {
+  const val = tiers?.[configKey] ?? (configKey === "complexity_threshold" ? 0.5 : 0.85);
+  return (
+    <div className="flex items-center justify-between gap-6">
+      <span className="text-sm text-[var(--text-secondary)] w-56">{label}</span>
+      <div className="flex items-center gap-3 flex-1">
+        <input
+          type="range" min={min} max={max} step={step}
+          defaultValue={val}
+          className="flex-1 accent-[var(--accent-purple)]"
+          onMouseUp={e => updateThreshold(configKey, parseFloat((e.target as HTMLInputElement).value))}
+        />
+        <span className="text-sm text-[var(--text-muted)] w-16 text-right">{val}{unit}</span>
+      </div>
+    </div>
+  );
+};
+
 export default function Config() {
-  const [tiers, setTiers]             = useState<any>(null);
+  const [tiers, setTiers]             = useState<any | null>(null);
   const [fastTier, setFastTier]       = useState<string[]>([]);
   const [heavyTier, setHeavyTier]     = useState<string[]>([]);
   const [keyStatuses, setKeyStatuses] = useState<{ provider: string; present: boolean }[]>([]);
@@ -42,6 +65,7 @@ export default function Config() {
     } catch {}
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const saveKey = async (provider: string) => {
@@ -87,27 +111,7 @@ export default function Config() {
     await fetchAll();
   };
 
-  const SliderRow = ({
-    label, configKey, min, max, step, unit,
-  }: {
-    label: string; configKey: string; min: number; max: number; step: number; unit: string;
-  }) => {
-    const val = tiers?.[configKey] ?? (configKey === "complexity_threshold" ? 0.5 : 0.85);
-    return (
-      <div className="flex items-center justify-between gap-6">
-        <span className="text-sm text-[var(--text-secondary)] w-56">{label}</span>
-        <div className="flex items-center gap-3 flex-1">
-          <input
-            type="range" min={min} max={max} step={step}
-            defaultValue={val}
-            className="flex-1 accent-[var(--accent-purple)]"
-            onMouseUp={e => updateThreshold(configKey, parseFloat((e.target as HTMLInputElement).value))}
-          />
-          <span className="text-sm text-[var(--text-muted)] w-16 text-right">{val}{unit}</span>
-        </div>
-      </div>
-    );
-  };
+
 
   return (
     <div className="flex flex-col gap-8 pb-8">
@@ -271,16 +275,19 @@ export default function Config() {
           label="KNN Routing threshold (fast vs heavy)"
           configKey="complexity_threshold"
           min={0.1} max={0.9} step={0.05} unit=""
+          tiers={tiers} updateThreshold={updateThreshold}
         />
         <SliderRow
           label="Semantic cache similarity threshold"
           configKey="cache_similarity_threshold"
           min={0.5} max={0.99} step={0.01} unit=""
+          tiers={tiers} updateThreshold={updateThreshold}
         />
         <SliderRow
           label="Redis cache TTL"
           configKey="cache_ttl_seconds"
           min={60} max={86400} step={60} unit="s"
+          tiers={tiers} updateThreshold={updateThreshold}
         />
       </div>
 

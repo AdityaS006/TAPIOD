@@ -39,7 +39,7 @@ const LAYER_LABELS: Record<string, string> = {
 export default function Dashboard() {
   const [savings, setSavings] = useState<Savings | null>(null);
   const [traces, setTraces] = useState<Trace[]>([]);
-  const [metrics, setMetrics] = useState<any>(null);
+  const [metrics, setMetrics] = useState<any | null>(null);
 
   useEffect(() => {
     const fetchAll = async () => {

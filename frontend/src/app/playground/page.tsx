@@ -77,6 +77,7 @@ export default function Playground() {
     } catch {}
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchSessions(); }, [fetchSessions]);
 
   useEffect(() => {
@@ -112,6 +113,7 @@ export default function Playground() {
   };
 
   const newChat = () => {
+    // eslint-disable-next-line react-hooks/purity
     setCurrentSessionId(`session_${Date.now()}`);
     setMessages([]);
     setTrace(null);

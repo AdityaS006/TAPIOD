@@ -31,5 +31,5 @@ def test_estimate_cache_save_returns_float():
 def test_estimate_cache_save_opus_more_expensive_than_groq():
     prompt = "Write a Python function that sorts a list."
     groq_save = estimate_cache_save(prompt, baseline_model="groq/llama-3.1-8b-instant")
-    opus_save = estimate_cache_save(prompt, baseline_model="anthropic/claude-opus-4-8")
+    opus_save = estimate_cache_save(prompt, baseline_model="anthropic/claude-3-opus-20240229")
     assert opus_save > groq_save

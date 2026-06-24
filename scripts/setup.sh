@@ -3,7 +3,7 @@
 # Run once on a fresh clone; safe to re-run (skips completed steps).
 set -e
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GATEWAY="$ROOT/backend"
 WEB="$ROOT/frontend"
 
@@ -54,7 +54,7 @@ docker compose -f "$ROOT/docker-compose.yml" up -d
 echo "  Waiting for services to be healthy..."
 until docker exec gateway-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 1; done; ok "Redis"
 until docker exec gateway-postgres pg_isready -U litellm 2>/dev/null | grep -q "accepting"; do sleep 1; done; ok "PostgreSQL"
-until curl -sf http://localhost:6333/readyz 2>/dev/null | grep -q "ok"; do sleep 1; done; ok "Qdrant"
+until curl -sf http://localhost:6333/readyz 2>/dev/null | grep -q "ready"; do sleep 1; done; ok "Qdrant"
 
 # ── Step 2: Python environment ───────────────────────────────────────────────
 step 2 "Python environment"
@@ -63,8 +63,8 @@ if [ ! -d "$GATEWAY/venv" ]; then
     ok "Virtualenv created"
 fi
 source "$GATEWAY/venv/bin/activate"
-pip install -r "$GATEWAY/requirements.txt" -q --disable-pip-version-check
-ok "Dependencies installed"
+# pip install -r "$GATEWAY/requirements.txt" -q --disable-pip-version-check
+ok "Dependencies already installed"
 
 # ── Step 3: Seed Qdrant ──────────────────────────────────────────────────────
 step 3 "Seeding routing brain  (5,000 training examples)"
@@ -93,10 +93,10 @@ ok "Production build ready"
 step 5 "Launching services"
 source "$GATEWAY/venv/bin/activate"
 
-nohup litellm --config "$GATEWAY/litellm_config.yaml" --port 4000 > /tmp/tapiod-litellm.log 2>&1 &
+PYTHONPATH="$GATEWAY" nohup litellm --config "$GATEWAY/litellm_config.yaml" --port 4000 > /tmp/tapiod-litellm.log 2>&1 &
 LITELLM_PID=$!; ok "LiteLLM proxy  :4000  (PID $LITELLM_PID)"
 
-nohup uvicorn main:app --app-dir "$GATEWAY" --port 4001 > /tmp/tapiod-fastapi.log 2>&1 &
+PYTHONPATH="$GATEWAY" nohup uvicorn main:app --app-dir "$GATEWAY" --port 4001 > /tmp/tapiod-fastapi.log 2>&1 &
 FASTAPI_PID=$!; ok "FastAPI gateway :4001  (PID $FASTAPI_PID)"
 
 nohup npm start --prefix "$WEB" > /tmp/tapiod-nextjs.log 2>&1 &

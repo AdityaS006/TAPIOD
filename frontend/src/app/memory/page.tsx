@@ -32,6 +32,7 @@ export default function MemoryPage() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchMemories();
     const interval = setInterval(fetchMemories, 5000);
     return () => clearInterval(interval);

@@ -56,6 +56,36 @@ services_status = {"qdrant_ready": False, "redis_ready": False}
 # Store RequestContext objects keyed by request ID to avoid JSON serialization issues
 _ctx_store: dict[str, RequestContext] = {}
 
+import threading
+import time
+
+def init_qdrant_proxy():
+    global qdrant, embedding_model
+    for attempt in range(12):
+        try:
+            print(f"[LiteLLM Proxy] Initializing Qdrant + FastEmbed (attempt {attempt+1})...")
+            qdrant = QdrantClient(url=QDRANT_URL)
+            embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+            services_status["qdrant_ready"] = True
+            print("[LiteLLM Proxy] Qdrant initialized successfully.")
+            break
+        except Exception as e:
+            print(f"[LiteLLM Proxy] Qdrant init error: {e}. Retrying in 5s...")
+            time.sleep(5)
+
+def init_redis_proxy():
+    global redis_client
+    try:
+        redis_client = redis_lib.Redis(host="localhost", port=6379, decode_responses=True)
+        redis_client.ping()
+        services_status["redis_ready"] = True
+        print("[LiteLLM Proxy] Redis connected successfully.")
+    except Exception as e:
+        print(f"[LiteLLM Proxy] Redis connection failed: {e}")
+
+threading.Thread(target=init_qdrant_proxy, daemon=True).start()
+threading.Thread(target=init_redis_proxy, daemon=True).start()
+
 def _store_ctx(req_id: str, ctx: RequestContext):
     _ctx_store[req_id] = ctx
 
@@ -96,14 +126,15 @@ class GatewayHooks(CustomLogger):
         prompt = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
 
         # --- Embed ONCE ---
-        if qdrant is None or embedding_model is None or not prompt:
-            data["messages"] = messages
-            data["tenant_id"] = tenant_id
-            return data
-
-        t0 = time.perf_counter()
-        vec = list(embedding_model.embed([prompt]))[0].tolist()
-        embed_ms = seconds_to_ms(time.perf_counter() - t0)
+        vec = []
+        embed_ms = 0.0
+        if qdrant is not None and embedding_model is not None and prompt:
+            t0 = time.perf_counter()
+            try:
+                vec = list(embedding_model.embed([prompt]))[0].tolist()
+                embed_ms = seconds_to_ms(time.perf_counter() - t0)
+            except Exception:
+                pass
 
         trace_id = (data.get("metadata") or {}).get("_tapiod_trace_id", "")
         ctx = RequestContext(
@@ -111,9 +142,14 @@ class GatewayHooks(CustomLogger):
             tenant_id=tenant_id, user_id=user_id, vec=vec,
         )
         ctx._trace_id = trace_id
-        ctx.record("embed", f"384-dim in {embed_ms:.1f}ms", embed_ms)
+        if embed_ms > 0:
+            ctx.record("embed", f"384-dim in {embed_ms:.1f}ms", embed_ms)
+        else:
+            ctx.record("embed", "skipped", 0.0)
 
         bypass_cache = data.get("metadata", {}).get("bypass_cache", False)
+        if not vec:
+            bypass_cache = True
 
         async def _write_cache_hit_trace(ctx: RequestContext):
             """Write trace to Postgres for cache hits.
