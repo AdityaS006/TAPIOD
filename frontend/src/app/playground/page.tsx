@@ -129,6 +129,39 @@ export default function Playground() {
     } catch {}
   };
 
+  const regenerate = async (assistantIndex: number) => {
+    if (loading) return;
+    const contextMessages = messages.slice(0, assistantIndex);
+    setLoading(true);
+    setTrace(null);
+    try {
+      const res = await fetch("/api/agent/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "heavy-groq",
+          messages: contextMessages.map(m => ({ role: m.role, content: m.content })),
+          user: USER_ID,
+          metadata: { session_id: currentSessionId, bypass_cache: true },
+        }),
+      });
+      const data = await res.json();
+      const content = data?.choices?.[0]?.message?.content ?? "No response.";
+      const allMessages: Message[] = [
+        ...contextMessages,
+        { role: "assistant", content },
+        ...messages.slice(assistantIndex + 1),
+      ];
+      setMessages(allMessages);
+      if (data._tapiod_trace) setTrace(data._tapiod_trace);
+      await saveSession(currentSessionId, allMessages);
+    } catch {
+      // leave existing message intact on error
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
     const userMsg: Message = { role: "user", content: input };
@@ -224,15 +257,26 @@ export default function Playground() {
             </p>
           )}
           {messages.map((m, i) => (
-            <div key={i} className={`rounded-lg p-3 text-sm ${
-              m.role === "user"
-                ? "bg-[var(--accent-purple)]/10 border border-[var(--accent-purple)]/20 self-end max-w-[80%]"
-                : "bg-white/5 border border-white/5 self-start max-w-[90%]"
-            }`}>
-              <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">
-                {m.role === "user" ? "You" : "TAPIOD"}
-              </p>
-              <p className="text-[var(--text-primary)] whitespace-pre-wrap">{m.content}</p>
+            <div key={i} className={`flex flex-col gap-1 self-start max-w-[90%] ${m.role === "user" ? "self-end max-w-[80%]" : ""}`}>
+              <div className={`rounded-lg p-3 text-sm ${
+                m.role === "user"
+                  ? "bg-[var(--accent-purple)]/10 border border-[var(--accent-purple)]/20"
+                  : "bg-white/5 border border-white/5"
+              }`}>
+                <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">
+                  {m.role === "user" ? "You" : "TAPIOD"}
+                </p>
+                <p className="text-[var(--text-primary)] whitespace-pre-wrap">{m.content}</p>
+              </div>
+              {m.role === "assistant" && (
+                <button
+                  onClick={() => regenerate(i)}
+                  disabled={loading}
+                  className="self-start flex items-center gap-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--accent-purple-light)] disabled:opacity-30 transition-colors px-1"
+                >
+                  ↻ Regenerate
+                </button>
+              )}
             </div>
           ))}
           {loading && (

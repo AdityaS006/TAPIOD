@@ -17,7 +17,7 @@ import redis as redis_lib
 from fastembed import TextEmbedding
 from litellm.integrations.custom_logger import CustomLogger
 from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct
+from qdrant_client.models import PointStruct, Filter, FieldCondition, MatchValue
 
 try:
     from headroom import compress as headroom_compress
@@ -36,7 +36,7 @@ _HEADROOM_MODEL_MAP = {
     "heavy-gemini":    "gpt-4o",
 }
 
-from cache import redis_get, redis_set, qdrant_cache_get, qdrant_cache_set
+from cache import redis_get, redis_set, redis_cache_key, qdrant_cache_get, qdrant_cache_set
 from memory import memory_retrieve, build_memory_system_block, memory_extract_and_store
 from router import routellm_classify, knn_classify, pick_provider, compute_routing_save, get_available_providers, load_routing_config, get_costliest_available_model
 from cost import estimate_cache_save, estimate_memory_tokens_saved, seconds_to_ms
@@ -154,6 +154,32 @@ class GatewayHooks(CustomLogger):
         bypass_cache = data.get("metadata", {}).get("bypass_cache", False)
         if not vec:
             bypass_cache = True
+
+        # Explicit bypass (regenerate): purge stale entries so the fresh LLM answer replaces them
+        if data.get("metadata", {}).get("bypass_cache", False) and vec:
+            if services_status["redis_ready"] and redis_client:
+                try:
+                    redis_client.delete(redis_cache_key(tenant_id, messages))
+                except Exception:
+                    pass
+            if qdrant is not None:
+                try:
+                    config = load_routing_config()
+                    threshold = config.get("cache_similarity_threshold", 0.85)
+                    resp = qdrant.query_points(
+                        collection_name="semantic_cache_384",
+                        query=vec,
+                        query_filter=Filter(
+                            must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+                        ),
+                        limit=5,
+                    )
+                    stale_ids = [p.id for p in resp.points if p.score > threshold]
+                    if stale_ids:
+                        qdrant.delete(collection_name="semantic_cache_384", points_selector=stale_ids)
+                        print(f"[Cache] Purged {len(stale_ids)} stale point(s) for regenerate")
+                except Exception:
+                    pass
 
         async def _write_cache_hit_trace(ctx: RequestContext, redis_trace_id: str):
             """Write trace to Postgres and Redis for cache hits.
