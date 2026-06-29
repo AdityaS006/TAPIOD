@@ -36,7 +36,7 @@ function SavingsBar({ label, value, total, color }: { label: string; value: numb
 export default function Observability() {
   const [stats, setStats] = useState<RoutingStats | null>(null);
   const [savings, setSavings] = useState<SavingsData | null>(null);
-  const [timeRange, setTimeRange] = useState("7d");
+  const [timeRange, setTimeRange] = useState("24h");
 
   useEffect(() => {
     const fetchAll = async () => {
