@@ -5,6 +5,16 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 const COLORS = ["#a855f7", "#3b82f6", "#10b981", "#f59e0b", "#ef4444"];
 
+interface RoutingDistEntry { provider: string; count: number; pct: number; cost: number }
+interface RoutingStats {
+  baseline_usd?: number; actual_usd?: number; arbitrage_saved_usd?: number;
+  distribution?: RoutingDistEntry[];
+}
+interface SavingsData {
+  total_saved_usd?: number; cache_saved_usd?: number; routing_saved_usd?: number;
+  cache_hits_redis?: number; cache_hits_qdrant?: number;
+}
+
 function SavingsBar({ label, value, total, color }: { label: string; value: number; total: number; color: string }) {
   const pct = total > 0 ? (value / total) * 100 : 0;
   return (
@@ -24,9 +34,9 @@ function SavingsBar({ label, value, total, color }: { label: string; value: numb
 }
 
 export default function Observability() {
-  const [stats, setStats] = useState<any | null>(null);
-  const [savings, setSavings] = useState<any | null>(null);
-  const [timeRange, setTimeRange] = useState("24h");
+  const [stats, setStats] = useState<RoutingStats | null>(null);
+  const [savings, setSavings] = useState<SavingsData | null>(null);
+  const [timeRange, setTimeRange] = useState("7d");
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -136,15 +146,15 @@ export default function Observability() {
               <ResponsiveContainer width="100%" height={180}>
                 <PieChart>
                   <Pie data={stats.distribution} dataKey="count" nameKey="provider" cx="50%" cy="50%" outerRadius={75}>
-                    {stats.distribution.map((_: any, i: number) => (
+                    {stats.distribution.map((_: unknown, i: number) => (
                       <Cell key={i} fill={COLORS[i % COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={( v: any) => `${v} requests`} />
+                  <Tooltip formatter={(v: number | string) => `${v} requests`} />
                 </PieChart>
               </ResponsiveContainer>
               <div className="flex flex-col gap-2 mt-4">
-                {stats.distribution.map((d: any, i: number) => (
+                {stats.distribution.map((d: RoutingDistEntry, i: number) => (
                   <div key={d.provider} className="flex items-center justify-between text-xs">
                     <span className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} />

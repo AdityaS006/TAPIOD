@@ -42,7 +42,7 @@ const SliderRow = ({
 };
 
 export default function Config() {
-  const [tiers, setTiers]             = useState<any | null>(null);
+  const [tiers, setTiers]             = useState<Record<string, number> | null>(null);
   const [fastTier, setFastTier]       = useState<string[]>([]);
   const [heavyTier, setHeavyTier]     = useState<string[]>([]);
   const [keyStatuses, setKeyStatuses] = useState<{ provider: string; present: boolean }[]>([]);

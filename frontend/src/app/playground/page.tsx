@@ -158,7 +158,6 @@ export default function Playground() {
   };
 
   const newChat = () => {
-    // eslint-disable-next-line react-hooks/purity
     setCurrentSessionId(`session_${Date.now()}`);
     setMessages([]);
     setTrace(null);
@@ -462,7 +461,100 @@ export default function Playground() {
           )}
           <div ref={bottomRef} />
         </div>
+        {/* Vision warning banner */}
+        {attachedFiles.some(f => f.status === "ready" && f.base64) && GROQ_MODELS.has(oneOffModel ?? baseModel) && (
+          <div className="flex items-center justify-between gap-3 mb-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs">
+            <span className="text-amber-300">⚠ Groq/Llama doesn&apos;t support images.</span>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => setOneOffModel("heavy-openai")}
+                className="px-2 py-1 rounded bg-amber-500/20 border border-amber-500/30 text-amber-200 hover:bg-amber-500/30 transition-colors"
+              >
+                Use gpt-4o for this message
+              </button>
+              <button
+                onClick={() => setAttachedFiles(prev => prev.filter(f => !f.base64))}
+                className="px-2 py-1 rounded border border-white/10 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+              >
+                Remove images
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* File chips row */}
+        {attachedFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {attachedFiles.map(f => (
+              <div
+                key={f.id}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                  f.status === "error"
+                    ? "bg-red-500/10 border-red-500/30 text-red-400"
+                    : f.status === "loading"
+                    ? "bg-white/5 border-white/10 text-[var(--text-muted)]"
+                    : "bg-white/8 border-white/15 text-[var(--text-primary)]"
+                }`}
+              >
+                <span>{f.status === "loading" ? "⏳" : fileIcon(f.mimeType, f.name)}</span>
+                <span className="max-w-[120px] truncate">
+                  {f.name.length > 20 ? f.name.slice(0, 18) + "…" : f.name}
+                </span>
+                {f.status === "error" && (
+                  <span className="text-[10px] opacity-70 max-w-[80px] truncate">{f.errorMsg}</span>
+                )}
+                {f.status === "ready" && f.toonAvailable && (
+                  <button
+                    onClick={() =>
+                      setAttachedFiles(prev =>
+                        prev.map(a => a.id === f.id ? { ...a, useToon: !a.useToon } : a)
+                      )
+                    }
+                    className={`px-1 rounded text-[9px] font-mono border transition-colors ${
+                      f.useToon
+                        ? "bg-[var(--accent-purple)]/30 border-[var(--accent-purple)]/50 text-[var(--accent-purple-light)]"
+                        : "border-white/20 text-[var(--text-muted)] hover:border-white/40"
+                    }`}
+                  >
+                    {f.useToon ? "TOON ✓" : "→ TOON"}
+                  </button>
+                )}
+                {f.status !== "loading" && (
+                  <button
+                    onClick={() => setAttachedFiles(prev => prev.filter(a => a.id !== f.id))}
+                    className="text-[var(--text-muted)] hover:text-red-400 transition-colors ml-0.5"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Input row */}
         <div className="flex gap-2">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".txt,.md,.py,.js,.ts,.jsx,.tsx,.json,.csv,.yaml,.yml,.html,.css,.pdf,.png,.jpg,.jpeg,.webp,.gif"
+            className="hidden"
+            onChange={e => {
+              Array.from(e.target.files ?? []).forEach(processFile);
+              e.target.value = "";
+            }}
+          />
+          {/* + button */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={loading}
+            className="px-3 py-2 rounded-lg border border-white/10 text-[var(--text-muted)] text-sm hover:border-white/20 hover:text-[var(--text-primary)] disabled:opacity-40 transition-colors"
+            title="Attach file"
+          >
+            +
+          </button>
           <input
             ref={inputRef}
             className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent-purple-light)]"
@@ -473,7 +565,7 @@ export default function Playground() {
           />
           <button
             onClick={sendMessage}
-            disabled={loading}
+            disabled={loading || attachedFiles.some(f => f.status === "loading")}
             className="px-4 py-2 rounded-lg bg-[var(--accent-purple)] text-white text-sm font-medium disabled:opacity-50"
           >
             Send
