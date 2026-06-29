@@ -176,6 +176,11 @@ export default function Playground() {
   const regenerate = async (assistantIndex: number) => {
     if (loading) return;
     const contextMessages = messages.slice(0, assistantIndex);
+    // Use a vision-capable model if context contains image content and baseModel is Groq
+    const hasImageContent = contextMessages.some(
+      m => Array.isArray(m.content) && m.content.some((p: MessageContentPart) => p.type === "image_url")
+    );
+    const regenModel = (hasImageContent && GROQ_MODELS.has(baseModel)) ? "heavy-openai" : baseModel;
     setLoading(true);
     setTrace(null);
     try {
@@ -183,7 +188,7 @@ export default function Playground() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: baseModel,
+          model: regenModel,
           messages: contextMessages.map(m => ({ role: m.role, content: m.content })),
           user: USER_ID,
           metadata: { session_id: currentSessionId, bypass_cache: true },

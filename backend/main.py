@@ -3,6 +3,7 @@ import time
 import threading
 import asyncio
 import hashlib
+import io
 import json
 import os
 import uuid
@@ -501,7 +502,6 @@ async def extract_file(file: UploadFile = File(...)):
         if not PDFPLUMBER_AVAILABLE:
             return JSONResponse({"error": "PDF extraction not available (pdfplumber missing)"}, status_code=422)
         try:
-            import io
             with pdfplumber.open(io.BytesIO(raw)) as pdf:
                 pages = [page.extract_text() or "" for page in pdf.pages]
             text = "\n\n".join(p for p in pages if p.strip())

@@ -42,7 +42,7 @@ def test_to_toon_array():
     data = [{"name": "a", "parameters": {}}, {"name": "b", "parameters": {}}]
     result = _to_toon(data)
     assert "# TOON" in result
-    assert "tool_a" in result or "a" in result
+    assert '"a"' in result and '"b"' in result
 
 
 # ── endpoint tests ───────────────────────────────────────────────────────────
