@@ -18,8 +18,8 @@ load_dotenv(Path(__file__).parent / ".env", override=False)
 import asyncpg
 import httpx
 import redis as redis_lib
-from fastapi import FastAPI, Query
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, File, Query, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastembed import TextEmbedding
 from pydantic import BaseModel
@@ -31,6 +31,12 @@ try:
     HEADROOM_AVAILABLE = True
 except Exception:
     HEADROOM_AVAILABLE = False
+
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    PDFPLUMBER_AVAILABLE = False
 
 # Map internal model aliases to names headroom knows for token counting
 _HEADROOM_MODEL_MAP = {
@@ -466,6 +472,66 @@ async def delete_chat(session_id: str, user_id: str, tenant_id: str):
         return {"status": "success"}
     except Exception as e:
         return {"error": str(e)}
+
+# ── /api/extract ─────────────────────────────────────────────────────────────
+
+def _is_tool_def(data: object) -> bool:
+    """Return True if data looks like an OpenAI tool-definition schema."""
+    if isinstance(data, dict):
+        return "name" in data and "parameters" in data
+    if isinstance(data, list) and len(data) > 0:
+        return all(isinstance(item, dict) and "name" in item and "parameters" in item for item in data)
+    return False
+
+
+def _to_toon(data: object) -> str:
+    """Stub: pretty-print JSON with a # TOON header. Real converter is a drop-in replacement."""
+    return "# TOON\n" + json.dumps(data, indent=2)
+
+
+@app.post("/api/extract")
+async def extract_file(file: UploadFile = File(...)):
+    """Extract text from uploaded files. Handles PDF, JSON, text/code, and unknown binary."""
+    raw = await file.read()
+    mime = file.content_type or ""
+    filename = file.filename or ""
+
+    # ── PDF ──────────────────────────────────────────────────────────────────
+    if mime == "application/pdf" or filename.lower().endswith(".pdf"):
+        if not PDFPLUMBER_AVAILABLE:
+            return JSONResponse({"error": "PDF extraction not available (pdfplumber missing)"}, status_code=422)
+        try:
+            import io
+            with pdfplumber.open(io.BytesIO(raw)) as pdf:
+                pages = [page.extract_text() or "" for page in pdf.pages]
+            text = "\n\n".join(p for p in pages if p.strip())
+            if not text.strip():
+                return JSONResponse({"error": "PDF contained no extractable text"}, status_code=422)
+            return {"text": text, "toon_available": False, "toon": None}
+        except Exception as e:
+            return JSONResponse({"error": f"PDF extraction failed: {type(e).__name__}"}, status_code=422)
+
+    # ── JSON ─────────────────────────────────────────────────────────────────
+    if mime in ("application/json", "text/json") or filename.lower().endswith(".json"):
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON"}, status_code=422)
+        if _is_tool_def(data):
+            toon = _to_toon(data)
+            return {"text": json.dumps(data, indent=2), "toon_available": True, "toon": toon}
+        return {"text": json.dumps(data, indent=2), "toon_available": False, "toon": None}
+
+    # ── Text / code (safety net) ──────────────────────────────────────────────
+    if mime.startswith("text/"):
+        try:
+            return {"text": raw.decode("utf-8"), "toon_available": False, "toon": None}
+        except UnicodeDecodeError:
+            return JSONResponse({"error": "Could not decode file as UTF-8"}, status_code=422)
+
+    # ── Unknown binary ────────────────────────────────────────────────────────
+    return JSONResponse({"error": "Unsupported file type"}, status_code=422)
+
 
 @app.get("/api/last_tools")
 async def get_last_tools(tenant_id: str = "default_tenant"):
