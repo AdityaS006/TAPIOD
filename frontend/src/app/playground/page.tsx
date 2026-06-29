@@ -18,9 +18,28 @@ interface TapiodTrace {
   injected_tools: string[];
 }
 
+interface MessageContentPart {
+  type: "text" | "image_url";
+  text?: string;
+  image_url?: { url: string };
+}
+
+interface AttachedFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  status: "ready" | "loading" | "error";
+  text?: string;
+  base64?: string;
+  toonAvailable?: boolean;
+  toon?: string;
+  useToon?: boolean;
+  errorMsg?: string;
+}
+
 interface Message {
   role: "user" | "assistant";
-  content: string;
+  content: string | MessageContentPart[];
 }
 
 interface ChatSession {
@@ -57,6 +76,27 @@ const LAYER_LABELS: Record<string, string> = {
   llm_call: "LLM Call",
 };
 
+const GROQ_MODELS = new Set(["heavy-groq", "fast-groq"]);
+
+const FILE_ICON: Record<string, string> = {
+  "image/png": "🖼",
+  "image/jpeg": "🖼",
+  "image/webp": "🖼",
+  "image/gif": "🖼",
+  "application/pdf": "📕",
+  "application/json": "📋",
+  "text/plain": "📄",
+};
+function fileIcon(mime: string, name: string): string {
+  if (FILE_ICON[mime]) return FILE_ICON[mime];
+  if (mime.startsWith("image/")) return "🖼";
+  if (mime.startsWith("text/")) return "📄";
+  const ext = name.split(".").pop()?.toLowerCase();
+  if (ext === "pdf") return "📕";
+  if (ext === "json") return "📋";
+  return "📎";
+}
+
 export default function Playground() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => `session_${Date.now()}`);
@@ -66,6 +106,10 @@ export default function Playground() {
   const [trace, setTrace] = useState<TapiodTrace | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [oneOffModel, setOneOffModel] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const baseModel = "heavy-groq";
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -86,7 +130,8 @@ export default function Playground() {
 
   const saveSession = useCallback(async (id: string, msgs: Message[]) => {
     if (msgs.length === 0) return;
-    const firstUser = msgs.find(m => m.role === "user")?.content ?? "Untitled";
+    const rawContent = msgs.find(m => m.role === "user")?.content ?? "Untitled";
+    const firstUser = typeof rawContent === "string" ? rawContent : getDisplayText(rawContent);
     const title = firstUser.slice(0, 45) + (firstUser.length > 45 ? "…" : "");
     try {
       await fetch("/api/chats", {
@@ -139,7 +184,7 @@ export default function Playground() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "heavy-groq",
+          model: baseModel,
           messages: contextMessages.map(m => ({ role: m.role, content: m.content })),
           user: USER_ID,
           metadata: { session_id: currentSessionId, bypass_cache: true },
@@ -164,19 +209,24 @@ export default function Playground() {
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
-    const userMsg: Message = { role: "user", content: input };
+    const assembled = buildContent(input, attachedFiles);
+    const userMsg: Message = { role: "user", content: assembled };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInput("");
+    setAttachedFiles([]);
     setLoading(true);
     setTrace(null);
+
+    const modelToUse = oneOffModel ?? baseModel;
+    setOneOffModel(null);
 
     try {
       const res = await fetch("/api/agent/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "heavy-groq",
+          model: modelToUse,
           messages: newMessages.map(m => ({ role: m.role, content: m.content })),
           user: USER_ID,
           metadata: { session_id: currentSessionId },
@@ -201,6 +251,132 @@ export default function Playground() {
     const diffH = (now.getTime() - d.getTime()) / 3600000;
     if (diffH < 24) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  };
+
+  function getDisplayText(content: string | MessageContentPart[]): string {
+    if (typeof content === "string") return content;
+    return content
+      .filter(p => p.type === "text")
+      .map(p => p.text ?? "")
+      .join("\n");
+  }
+
+  function buildContent(
+    userText: string,
+    files: AttachedFile[]
+  ): string | MessageContentPart[] {
+    const ready = files.filter(f => f.status === "ready");
+    const textFiles = ready.filter(f => f.text !== undefined);
+    const imageFiles = ready.filter(f => f.base64 !== undefined);
+
+    if (ready.length === 0) return userText;
+
+    if (imageFiles.length === 0) {
+      // Text-only attachments: prepend as a single string
+      const prefix = textFiles
+        .map(f => `${f.name}\n---\n${(f.useToon && f.toon) ? f.toon : f.text!}`)
+        .join("\n\n");
+      return prefix ? `${prefix}\n\n${userText}` : userText;
+    }
+
+    // Images present — must use content array
+    const parts: MessageContentPart[] = [];
+    textFiles.forEach(f => {
+      parts.push({
+        type: "text",
+        text: `${f.name}\n---\n${(f.useToon && f.toon) ? f.toon : f.text!}`,
+      });
+    });
+    imageFiles.forEach(f => {
+      parts.push({ type: "image_url", image_url: { url: f.base64! } });
+    });
+    if (userText.trim()) {
+      parts.push({ type: "text", text: userText });
+    }
+    return parts;
+  }
+
+  const processFile = async (file: File): Promise<void> => {
+    if (file.size > 10 * 1024 * 1024) {
+      // Reject client-side — chip never appears
+      console.warn(`[TAPIOD] File ${file.name} exceeds 10 MB limit`);
+      return;
+    }
+
+    const id = Math.random().toString(36).slice(2, 10);
+    const mimeType = file.type || "application/octet-stream";
+    const stub: AttachedFile = { id, name: file.name, mimeType, status: "loading" };
+    setAttachedFiles(prev => [...prev, stub]);
+
+    const setReady = (patch: Partial<AttachedFile>) =>
+      setAttachedFiles(prev => prev.map(f => f.id === id ? { ...f, status: "ready", ...patch } : f));
+    const setError = (errorMsg: string) =>
+      setAttachedFiles(prev => prev.map(f => f.id === id ? { ...f, status: "error", errorMsg } : f));
+
+    // ── Images ────────────────────────────────────────────────────────────────
+    if (mimeType.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = () => setReady({ base64: reader.result as string });
+      reader.onerror = () => setError("Could not read image");
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    // ── JSON — check client-side for tool-def shape ───────────────────────────
+    if (mimeType === "application/json" || file.name.toLowerCase().endsWith(".json")) {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const raw = reader.result as string;
+        let parsed: unknown;
+        try { parsed = JSON.parse(raw); } catch { setReady({ text: raw }); return; }
+        const isTool =
+          (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) &&
+           "name" in (parsed as object) && "parameters" in (parsed as object)) ||
+          (Array.isArray(parsed) && parsed.length > 0 &&
+           (parsed as unknown[]).every(
+             (item) => typeof item === "object" && item !== null &&
+               "name" in (item as object) && "parameters" in (item as object)
+           ));
+
+        if (!isTool) { setReady({ text: JSON.stringify(parsed, null, 2) }); return; }
+
+        // Tool-def: send to /api/extract for TOON
+        try {
+          const fd = new FormData();
+          fd.append("file", file);
+          const res = await fetch("/api/extract", { method: "POST", body: fd, signal: AbortSignal.timeout(15000) });
+          if (!res.ok) { const e = await res.json(); setError(e.error ?? "Extraction failed"); return; }
+          const data = await res.json();
+          setReady({ text: data.text, toonAvailable: data.toon_available, toon: data.toon ?? undefined });
+        } catch (e: unknown) {
+          setError((e instanceof Error && e.name === "TimeoutError") ? "Extraction timed out" : "Extraction failed");
+        }
+      };
+      reader.onerror = () => setError("Could not read file");
+      reader.readAsText(file);
+      return;
+    }
+
+    // ── Plain text / code ─────────────────────────────────────────────────────
+    if (mimeType.startsWith("text/")) {
+      const reader = new FileReader();
+      reader.onload = () => setReady({ text: reader.result as string });
+      reader.onerror = () => setError("Could not read file");
+      reader.readAsText(file);
+      return;
+    }
+
+    // ── PDF and everything else → backend ────────────────────────────────────
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/extract", { method: "POST", body: fd, signal: AbortSignal.timeout(15000) });
+      if (!res.ok) { const e = await res.json(); setError(e.error ?? "Extraction failed"); return; }
+      const data = await res.json();
+      setReady({ text: data.text, toonAvailable: data.toon_available, toon: data.toon ?? undefined });
+    } catch (e: unknown) {
+      setError((e instanceof Error && e.name === "TimeoutError") ? "Extraction timed out" : "Extraction failed");
+    }
   };
 
   return (
@@ -266,7 +442,7 @@ export default function Playground() {
                 <p className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mb-1">
                   {m.role === "user" ? "You" : "TAPIOD"}
                 </p>
-                <p className="text-[var(--text-primary)] whitespace-pre-wrap">{m.content}</p>
+                <p className="text-[var(--text-primary)] whitespace-pre-wrap">{getDisplayText(m.content)}</p>
               </div>
               {m.role === "assistant" && (
                 <button
