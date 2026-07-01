@@ -109,13 +109,13 @@ class _AsyncCompletions:
         model: str = "fast-groq",
         stream: bool = False,
         **kwargs,
-    ) -> "ChatCompletion | AsyncIterator[str]":
+    ) -> "ChatCompletion":  # when stream=True, returns AsyncGenerator — use: async for t in await create(stream=True)
         payload = {"model": model, "messages": messages, **kwargs}
         headers = {"Authorization": f"Bearer {self._c.api_key}"}
         url = self._c.base_url + _AGENT_PATH
 
         if stream:
-            return self._astream(url, headers, payload)
+            return self._astream(url, headers, payload)  # type: ignore[return-value]
 
         resp = await self._c._http.post(url, json=payload, headers=headers)
         resp.raise_for_status()

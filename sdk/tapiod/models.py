@@ -38,10 +38,27 @@ class TapiodTrace:
         )
 
 
+class ToolCallFunction:
+    def __init__(self, d: dict):
+        self.name: str = d.get("name", "")
+        self.arguments: str = d.get("arguments", "")
+
+
+class ToolCall:
+    def __init__(self, d: dict):
+        self.id: str = d.get("id", "")
+        self.type: str = d.get("type", "function")
+        self.function = ToolCallFunction(d.get("function", {}))
+
+
 class Message:
     def __init__(self, d: dict):
         self.role: str = d.get("role", "assistant")
-        self.content: str = d.get("content", "")
+        self.content: str | None = d.get("content")
+        raw_tc = d.get("tool_calls")
+        self.tool_calls: list[ToolCall] | None = (
+            [ToolCall(tc) for tc in raw_tc] if raw_tc else None
+        )
 
 
 class Choice:
@@ -70,7 +87,7 @@ class ChatCompletion:
     @property
     def content(self) -> str:
         if self.choices:
-            return self.choices[0].message.content
+            return self.choices[0].message.content or ""
         return ""
 
     def __repr__(self) -> str:
