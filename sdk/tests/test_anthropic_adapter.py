@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import MagicMock
 from tapiod.anthropic import Anthropic
 from tapiod.anthropic._models import Message, TextBlock, ToolUseBlock
@@ -164,4 +163,16 @@ def test_anthropic_streaming_get_final_message(monkeypatch):
         msg = stream.get_final_message()
     assert isinstance(msg, Message)
     assert msg.content[0].text == "Hi"
+    client.close()
+
+
+def test_anthropic_tapiod_trace_none_when_absent(monkeypatch):
+    monkeypatch.setattr("tapiod._transport.TapiodTransport.post", MagicMock(return_value=FAKE_OAI_RESPONSE))
+    client = Anthropic(api_key="sk-ant-fake")
+    resp = client.messages.create(
+        model="claude-opus-4-8",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "Hi"}],
+    )
+    assert resp._tapiod_trace is None
     client.close()

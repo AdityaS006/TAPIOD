@@ -29,7 +29,10 @@ class Message:
         self.role: str = data.get("role", "assistant")
         self.stop_reason: str = data.get("stop_reason", "end_turn")
         self.usage = Usage(data.get("usage", {}))
-        self._tapiod_trace: TapiodTrace | None = None
+        raw_trace = data.get("_tapiod_trace")
+        self._tapiod_trace: TapiodTrace | None = (
+            TapiodTrace.from_dict(raw_trace) if raw_trace else None
+        )
 
         raw_content = data.get("content", [])
         self.content: list[TextBlock | ToolUseBlock] = []

@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-from tapiod._transport import TapiodTransport, AsyncTapiodTransport
+from tapiod._transport import TapiodTransport
 from tapiod._core.mapping import resolve_model
 from tapiod._core.converters import gemini_request_to_openai, openai_response_to_gemini
 from tapiod.google.generativeai._models import GenerateContentResponse
