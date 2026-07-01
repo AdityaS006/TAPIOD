@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tapiod"
-version = "0.1.0"
-description = "Lightweight client for the TAPIOD LLM gateway — caching, smart routing, memory and observability out of the box"
+version = "0.2.0"
+description = "Universal LLM SDK drop-in — replace OpenAI, Anthropic, Gemini, or Groq with one import line and get caching, routing, and observability for free"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -19,3 +19,6 @@ tapiod = "tapiod.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["tapiod*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
