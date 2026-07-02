@@ -272,9 +272,9 @@ class GatewayHooks(CustomLogger):
         else:
             ctx.record("memory_recall", "none", mem_ms)
 
-        # --- RouteLLM MF routing (falls back to KNN if OpenAI key unavailable) ---
+        # --- RouteLLM MF routing (falls back to KNN if RouteLLM unavailable) ---
         t0 = time.perf_counter()
-        complexity = routellm_classify(prompt, qdrant=qdrant, vec=vec)
+        complexity, router_name = routellm_classify(prompt, qdrant=qdrant, vec=vec)
         available = get_available_providers()
         chosen = pick_provider(available, complexity)
         route_ms = seconds_to_ms(time.perf_counter() - t0)
@@ -284,7 +284,7 @@ class GatewayHooks(CustomLogger):
             chosen, available,
             int(len(prompt.split()) * 1.3), 150
         )
-        ctx.record("knn_router", f"{chosen} (score {complexity:.2f})", route_ms)
+        ctx.record(router_name, f"{chosen} (score {complexity:.2f})", route_ms)
         data["model"] = chosen
 
         # --- Headroom compression ---

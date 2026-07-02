@@ -67,45 +67,41 @@ def _get_routellm():
         if _rl_controller is not None:
             return _rl_controller
         try:
-            # similarity_weighted router imports OpenAI eagerly at module level;
-            # set a placeholder so the import doesn't crash, the MF router only
-            # uses it at inference time (with the real key from os.environ).
             os.environ.setdefault("OPENAI_API_KEY", "placeholder")
             from routellm.controller import Controller
             _rl_controller = Controller(
                 routers=["mf"],
-                strong_model="gpt-4o",        # name doesn't matter — we only use the score
+                strong_model="gpt-4o",
                 weak_model="gpt-4o-mini",
                 progress_bar=False,
             )
-            print("[Router] RouteLLM MF controller ready")
+            print("[Router] RouteLLM MF controller ready", flush=True)
             return _rl_controller
         except Exception as e:
-            print(f"[Router] RouteLLM init failed ({e}), falling back to KNN")
+            print(f"[Router] RouteLLM init failed ({e}), falling back to KNN", flush=True)
             _rl_broken = True
             return None
 
 
-def routellm_classify(prompt: str, qdrant=None, vec: list | None = None) -> float:
+def routellm_classify(prompt: str, qdrant=None, vec: list | None = None) -> tuple[float, str]:
     """
-    Routes using KNN when an embedding vector is available (always preferred —
-    it's local, free, and returns a nuanced 0.0–1.0 score).
-    RouteLLM MF is only tried when no vec is provided, because it calls the
-    OpenAI Embeddings API which adds ~1.5 s of latency per request.
+    Primary: RouteLLM MF matrix-factorisation router (trained on Chatbot Arena).
+    Fallback: KNN vote against routing_examples collection in Qdrant.
+    Returns (complexity_score, router_name) so callers can label traces correctly.
     """
-    if vec is not None and qdrant is not None:
-        return knn_classify(qdrant, vec)
-
     controller = _get_routellm()
     if controller is not None:
         try:
             result = controller.route(prompt, "mf", threshold=MF_THRESHOLD)
             score = 1.0 if result == "gpt-4o" else 0.0
-            return score
+            return score, "routellm_mf"
         except Exception as e:
-            print(f"[Router] RouteLLM route() failed ({e}), falling back to KNN")
+            print(f"[Router] RouteLLM route() failed ({e}), falling back to KNN", flush=True)
 
-    return knn_classify(qdrant, vec)
+    if vec is not None and qdrant is not None:
+        return knn_classify(qdrant, vec), "knn_router"
+
+    return 0.5, "default"
 
 
 def knn_classify(qdrant, vec: list, top_k: int = 5) -> float:
