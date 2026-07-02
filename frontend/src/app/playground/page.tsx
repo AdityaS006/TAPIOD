@@ -40,6 +40,7 @@ interface AttachedFile {
 interface Message {
   role: "user" | "assistant";
   content: string | MessageContentPart[];
+  attachments?: Array<{ name: string; mimeType: string }>;
 }
 
 interface ChatSession {
@@ -213,8 +214,13 @@ export default function Playground() {
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
+    const readyFiles = attachedFiles.filter(f => f.status === "ready");
     const assembled = buildContent(input, attachedFiles);
-    const userMsg: Message = { role: "user", content: assembled };
+    const userMsg: Message = {
+      role: "user",
+      content: input,
+      attachments: readyFiles.map(f => ({ name: f.name, mimeType: f.mimeType })),
+    };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInput("");
@@ -225,15 +231,25 @@ export default function Playground() {
     const modelToUse = oneOffModel ?? baseModel;
     setOneOffModel(null);
 
+    // Build API payload: all prior messages use stored content, last message uses assembled
+    const apiMessages = newMessages.map((m, idx) =>
+      idx === newMessages.length - 1
+        ? { role: m.role, content: assembled }
+        : { role: m.role, content: m.content }
+    );
+
     try {
       const res = await fetch("/api/agent/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: modelToUse,
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+          messages: apiMessages,
           user: USER_ID,
-          metadata: { session_id: currentSessionId },
+          metadata: {
+            session_id: currentSessionId,
+            ...(readyFiles.length > 0 ? { bypass_tool_inject: true } : {}),
+          },
         }),
       });
       const data = await res.json();
@@ -270,7 +286,7 @@ export default function Playground() {
     files: AttachedFile[]
   ): string | MessageContentPart[] {
     const ready = files.filter(f => f.status === "ready");
-    const textFiles = ready.filter(f => f.text !== undefined);
+    const textFiles = ready.filter(f => f.text !== undefined && f.text.trim().length > 0);
     const imageFiles = ready.filter(f => f.base64 !== undefined);
 
     if (ready.length === 0) return userText;
@@ -377,6 +393,10 @@ export default function Playground() {
       const res = await fetch("/api/extract", { method: "POST", body: fd, signal: AbortSignal.timeout(15000) });
       if (!res.ok) { const e = await res.json(); setError(e.error ?? "Extraction failed"); return; }
       const data = await res.json();
+      if (!data.text?.trim()) {
+        setError("No text found — this PDF may be image-based (scanned)");
+        return;
+      }
       setReady({ text: data.text, toonAvailable: data.toon_available, toon: data.toon ?? undefined });
     } catch (e: unknown) {
       setError((e instanceof Error && e.name === "TimeoutError") ? "Extraction timed out" : "Extraction failed");
@@ -447,6 +467,15 @@ export default function Playground() {
                   {m.role === "user" ? "You" : "TAPIOD"}
                 </p>
                 <p className="text-[var(--text-primary)] whitespace-pre-wrap">{getDisplayText(m.content)}</p>
+                {m.attachments && m.attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {m.attachments.map((a, ai) => (
+                      <span key={ai} className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-white/5 border border-white/10 text-[var(--text-muted)]">
+                        {fileIcon(a.mimeType, a.name)} {a.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               {m.role === "assistant" && (
                 <button
