@@ -9,6 +9,7 @@ interface RoutingDistEntry { provider: string; count: number; pct: number; cost:
 interface RoutingStats {
   baseline_usd?: number; actual_usd?: number; arbitrage_saved_usd?: number;
   distribution?: RoutingDistEntry[];
+  routing_examples_count?: number;
 }
 interface SavingsData {
   total_saved_usd?: number; cache_saved_usd?: number; routing_saved_usd?: number;
@@ -141,20 +142,20 @@ export default function Observability() {
         {/* Routing distribution */}
         <div className="glass-panel p-6 flex flex-col">
           <h3 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-secondary)] mb-4">Routing Distribution</h3>
-          {stats?.distribution?.length > 0 ? (
+          {(stats?.distribution?.length ?? 0) > 0 ? (
             <>
               <ResponsiveContainer width="100%" height={180}>
                 <PieChart>
-                  <Pie data={stats.distribution} dataKey="count" nameKey="provider" cx="50%" cy="50%" outerRadius={75}>
-                    {stats.distribution.map((_: unknown, i: number) => (
+                  <Pie data={stats!.distribution!} dataKey="count" nameKey="provider" cx="50%" cy="50%" outerRadius={75}>
+                    {stats!.distribution!.map((_: unknown, i: number) => (
                       <Cell key={i} fill={COLORS[i % COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(v: number | string) => `${v} requests`} />
+                  <Tooltip formatter={(v) => `${v ?? 0} requests`} />
                 </PieChart>
               </ResponsiveContainer>
               <div className="flex flex-col gap-2 mt-4">
-                {stats.distribution.map((d: RoutingDistEntry, i: number) => (
+                {stats!.distribution!.map((d: RoutingDistEntry, i: number) => (
                   <div key={d.provider} className="flex items-center justify-between text-xs">
                     <span className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
