@@ -5,9 +5,9 @@
   "tiers": {
     "fast": [
       "fast-openai",
+      "fast-anthropic",
       "fast-groq",
-      "fast-gemini",
-      "fast-anthropic"
+      "fast-gemini"
     ],
     "heavy": [
       "heavy-openai",
