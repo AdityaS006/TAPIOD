@@ -2,20 +2,21 @@
 #!/bin/bash
 set -e
 
-GATEWAY_DIR="$(cd "$(dirname "$0")/backend" && pwd)"
-WEB_DIR="$(cd "$(dirname "$0")/frontend" && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+GATEWAY_DIR="$ROOT_DIR/backend"
+WEB_DIR="$ROOT_DIR/frontend"
 
 echo "Starting TAPIOD v2 stack..."
 
 # Ensure Docker containers are up first
 echo "Starting Docker containers..."
-docker compose -f "$(dirname "$0")/docker-compose.yml" up -d
+docker compose -f "$ROOT_DIR/docker-compose.yml" up -d
 echo "Waiting for Redis, Qdrant, PostgreSQL to be ready..."
 until docker exec gateway-redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 1; done
 echo "  Redis: ready"
 until docker exec gateway-postgres pg_isready -U litellm 2>/dev/null | grep -q "accepting"; do sleep 1; done
 echo "  PostgreSQL: ready"
-until curl -sf http://localhost:6333/readyz 2>/dev/null | grep -q "ok"; do sleep 1; done
+until curl -sf http://localhost:6333/readyz 2>/dev/null | grep -qE "ok|ready"; do sleep 1; done
 echo "  Qdrant: ready"
 
 cd "$GATEWAY_DIR"
